@@ -1,0 +1,150 @@
+# ====================
+# Miscellaneous
+# ====================
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+Thumbs.db
+
+# ====================
+# IDE - IntelliJ / Android Studio
+# ====================
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# ====================
+# IDE - VS Code
+# ====================
+# .vscode/
+
+# ====================
+# Flutter / Dart / Pub
+# ====================
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
+pubspec.lock
+
+# ====================
+# Code Generation (build_runner)
+# ====================
+*.g.dart
+*.freezed.dart
+*.gr.dart
+*.mocks.dart
+
+# ====================
+# iOS
+# ====================
+**/ios/Pods/
+**/ios/.symlinks/
+**/ios/Flutter/Flutter.framework
+**/ios/Flutter/Flutter.podspec
+**/ios/Flutter/Generated.xcconfig
+**/ios/Flutter/app.flx
+**/ios/Flutter/flutter_assets/
+**/ios/Flutter/ephemeral/
+**/ios/ServiceDefinitions.json
+**/ios/Runner/GeneratedPluginRegistrant.*
+**/ios/Podfile.lock
+*.xcworkspace
+!default.xcworkspace
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+
+# ====================
+# Android
+# ====================
+**/android/app/debug
+**/android/app/profile
+**/android/app/release
+**/android/.gradle/
+**/android/captures/
+**/android/gradlew
+**/android/gradlew.bat
+**/android/gradle/wrapper/
+**/android/local.properties
+**/android/key.properties
+**/android/app/*.keystore
+**/android/app/*.jks
+*.apk
+*.aab
+
+# ====================
+# Symbolication / Obfuscation
+# ====================
+app.*.symbols
+app.*.map.json
+*.dSYM.zip
+*.dSYM/
+
+# ====================
+# Web
+# ====================
+**/web/favicon.png
+**/web/icons/
+
+# ====================
+# Environment & Secrets
+# ====================
+.env
+.env.*
+*.env
+!.env.example
+secrets.json
+**/secrets/
+*.pem
+*.p12
+*.key
+*.keystore
+google-services.json
+GoogleService-Info.plist
+
+# ====================
+# Test & Coverage
+# ====================
+coverage/
+.test_coverage.dart
+lcov.info
+*.lcov
+
+# ====================
+# Logs & Crash Reports
+# ====================
+*.log
+logs/
+crash_reports/
+*.crashlog
+
+# ====================
+# Temporary Files
+# ====================
+*.tmp
+*.temp
+*.bak
+*.backup
+*~
+
+# ====================
+# Tool-specific
+# ====================
+.serena/
+.claude/
