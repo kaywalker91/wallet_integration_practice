@@ -16,6 +16,7 @@ export 'extensions/string_extensions.dart';
 // Utils
 export 'utils/address_utils.dart';
 export 'utils/logger.dart';
+export 'utils/wallet_utils.dart';
 
 // Services
 export 'services/deep_link_service.dart';

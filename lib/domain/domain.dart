@@ -4,6 +4,8 @@ library domain;
 // Entities
 export 'entities/wallet_entity.dart';
 export 'entities/transaction_entity.dart';
+export 'entities/connected_wallet_entry.dart';
+export 'entities/multi_wallet_state.dart';
 
 // Repositories
 export 'repositories/wallet_repository.dart';

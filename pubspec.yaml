@@ -15,28 +15,29 @@ dependencies:
   cupertino_icons: ^1.0.8
 
   # State Management
-  flutter_riverpod: ^2.6.1
-  riverpod_annotation: ^2.6.1
+  flutter_riverpod: ^3.0.3
+  riverpod_annotation: ^3.0.3
 
   # WalletConnect & Web3
-  reown_appkit: ^1.3.0
+  reown_appkit: ^1.7.0
   web3dart: ^2.7.3
 
   # Solana
-  solana: ^0.31.0
+  solana: ^0.32.0
 
   # Deep Link & URL
   url_launcher: ^6.3.1
-  app_links: ^6.3.3
+  app_links: ^7.0.0
 
   # Storage
   flutter_secure_storage: ^9.2.3
   shared_preferences: ^2.3.4
 
   # Utilities
-  freezed_annotation: ^2.4.4
+  freezed_annotation: ^3.1.0
   json_annotation: ^4.9.0
   equatable: ^2.0.7
+  intl: ^0.20.1
   dartz: ^0.10.1
   logger: ^2.5.0
   qr_flutter: ^4.1.0
@@ -52,9 +53,9 @@ dev_dependencies:
 
   flutter_lints: ^6.0.0
   build_runner: ^2.4.14
-  freezed: ^2.5.8
+  freezed: ^3.2.0
   json_serializable: ^6.9.0
-  riverpod_generator: ^2.6.3
+  riverpod_generator: ^3.0.3
   mockito: ^5.4.4
   mocktail: ^1.0.4
 

@@ -7,6 +7,7 @@ import 'package:wallet_integration_practice/presentation/providers/chain_provide
 import 'package:wallet_integration_practice/presentation/widgets/wallet/wallet_card.dart';
 import 'package:wallet_integration_practice/presentation/widgets/wallet/wallet_selector.dart';
 import 'package:wallet_integration_practice/presentation/widgets/wallet/qr_code_display.dart';
+import 'package:wallet_integration_practice/presentation/widgets/wallet/connected_wallets_section.dart';
 import 'package:wallet_integration_practice/presentation/widgets/common/loading_overlay.dart';
 
 /// Main home screen
@@ -23,7 +24,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final walletState = ref.watch(walletNotifierProvider);
     final selectedChain = ref.watch(chainSelectionProvider);
 
     return Scaffold(
@@ -60,15 +60,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 ),
                 const SizedBox(height: 24),
 
-                // Wallet connection section
-                walletState.when(
-                  data: (wallet) {
-                    if (wallet != null) {
+                // Active wallet display (using multi-wallet state)
+                Consumer(
+                  builder: (context, ref, _) {
+                    final activeEntry = ref.watch(activeWalletEntryProvider);
+
+                    if (activeEntry != null) {
                       return Column(
                         children: [
                           WalletCard(
-                            wallet: wallet,
-                            onDisconnect: _disconnectWallet,
+                            wallet: activeEntry.wallet,
+                            onDisconnect: () => _disconnectActiveWallet(activeEntry.id),
                             onSwitchChain: () => _showChainSelector(context),
                           ),
                           const SizedBox(height: 24),
@@ -78,19 +80,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                           ),
                         ],
                       );
-                    } else {
-                      return _ConnectWalletCard(
-                        onConnect: () => _showWalletSelector(context),
-                      );
                     }
+                    return const SizedBox.shrink();
                   },
-                  loading: () => const Center(
-                    child: CircularProgressIndicator(),
-                  ),
-                  error: (error, _) => _ErrorCard(
-                    message: error.toString(),
-                    onRetry: () => _showWalletSelector(context),
-                  ),
+                ),
+
+                const SizedBox(height: 16),
+
+                // Connected wallets section (multi-wallet list)
+                ConnectedWalletsSection(
+                  onConnectAnother: () => _showWalletSelector(context),
                 ),
 
                 // QR Code display (if connecting via WalletConnect)
@@ -122,8 +121,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     try {
       final selectedChain = ref.read(chainSelectionProvider);
 
-      // Start connection
-      ref.read(walletNotifierProvider.notifier).connect(
+      // Start connection using MultiWalletNotifier
+      ref.read(multiWalletNotifierProvider.notifier).connectWallet(
             walletType: wallet.type,
             chainId: selectedChain.chainId,
             cluster: selectedChain.cluster,
@@ -153,6 +152,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         });
       }
     }
+  }
+
+  Future<void> _disconnectActiveWallet(String walletId) async {
+    await ref.read(multiWalletNotifierProvider.notifier).disconnectWallet(walletId);
+    setState(() {
+      _connectionUri = null;
+    });
   }
 
   Future<void> _disconnectWallet() async {
@@ -189,8 +195,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Future<void> _signMessage(BuildContext context) async {
-    final wallet = ref.read(walletNotifierProvider).value;
-    if (wallet == null) return;
+    // Get active wallet from multi-wallet state
+    final activeEntry = ref.read(activeWalletEntryProvider);
+    if (activeEntry == null) return;
+    final wallet = activeEntry.wallet;
 
     // Show sign message dialog
     final message = await showDialog<String>(

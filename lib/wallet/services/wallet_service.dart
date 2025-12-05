@@ -6,6 +6,7 @@ import 'package:wallet_integration_practice/wallet/adapters/base_wallet_adapter.
 import 'package:wallet_integration_practice/wallet/adapters/walletconnect_adapter.dart';
 import 'package:wallet_integration_practice/wallet/adapters/metamask_adapter.dart';
 import 'package:wallet_integration_practice/wallet/adapters/phantom_adapter.dart';
+import 'package:wallet_integration_practice/wallet/adapters/trust_wallet_adapter.dart';
 import 'package:wallet_integration_practice/wallet/models/wallet_adapter_config.dart';
 
 /// Wallet service that manages different wallet adapters
@@ -66,8 +67,9 @@ class WalletService {
         return WalletConnectAdapter(config: _config);
       case WalletType.phantom:
         return PhantomAdapter();
-      case WalletType.coinbase:
       case WalletType.trustWallet:
+        return TrustWalletAdapter(config: _config);
+      case WalletType.coinbase:
       case WalletType.rainbow:
       case WalletType.rabby:
         // These wallets use WalletConnect
@@ -276,6 +278,9 @@ class WalletService {
       if (phantomAdapter is PhantomAdapter) {
         await phantomAdapter.handleDeepLinkCallback(uri);
       }
+    } else if (host == 'trust' || path.contains('trust')) {
+      // Trust Wallet uses WalletConnect, callback handled by WC session
+      AppLogger.wallet('Trust Wallet deep link received', data: {'uri': uri.toString()});
     }
     // Add more wallet-specific deep link handling as needed
   }

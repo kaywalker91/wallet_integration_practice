@@ -1,7 +1,9 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+// ignore: depend_on_referenced_packages
+import 'package:flutter_riverpod/legacy.dart';
 import 'package:wallet_integration_practice/core/constants/chain_constants.dart';
 
-/// Provider for selected chain
+/// Provider for selected chain (Riverpod 3.0 compatible)
 final selectedChainProvider = StateProvider<ChainInfo>((ref) {
   return SupportedChains.ethereumSepolia; // Default to testnet
 });
@@ -36,9 +38,12 @@ final chainByIdProvider = Provider.family<ChainInfo?, int>((ref, chainId) {
   return SupportedChains.getByChainId(chainId);
 });
 
-/// Notifier for chain selection
-class ChainSelectionNotifier extends StateNotifier<ChainInfo> {
-  ChainSelectionNotifier() : super(SupportedChains.ethereumSepolia);
+/// Notifier for chain selection (Riverpod 3.0 - uses Notifier instead of StateNotifier)
+class ChainSelectionNotifier extends Notifier<ChainInfo> {
+  @override
+  ChainInfo build() {
+    return SupportedChains.ethereumSepolia;
+  }
 
   void selectChain(ChainInfo chain) {
     state = chain;
@@ -52,8 +57,8 @@ class ChainSelectionNotifier extends StateNotifier<ChainInfo> {
   }
 }
 
-/// Provider for chain selection notifier
+/// Provider for chain selection notifier (Riverpod 3.0 - uses NotifierProvider)
 final chainSelectionProvider =
-    StateNotifierProvider<ChainSelectionNotifier, ChainInfo>((ref) {
-  return ChainSelectionNotifier();
-});
+    NotifierProvider<ChainSelectionNotifier, ChainInfo>(
+  ChainSelectionNotifier.new,
+);
