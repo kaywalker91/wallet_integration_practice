@@ -153,7 +153,7 @@ class RabbyWalletAdapter extends WalletConnectAdapter {
       final wallet = WalletEntity(
         address: connectedAddress!,
         type: walletType,
-        chainId: currentChainId,
+        chainId: requestedChainId ?? currentChainId,
         connectedAt: DateTime.now(),
       );
       return wallet;

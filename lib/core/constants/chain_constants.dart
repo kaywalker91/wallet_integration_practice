@@ -18,6 +18,9 @@ class ChainConstants {
   static const int klaytnMainnet = 8217;
   static const int klaytnTestnet = 1001;
 
+  // ILITY Chain (TODO: Replace with actual chain ID when available)
+  static const int ilityMainnet = 999999;
+
   // Solana Clusters
   static const String solanaMainnet = 'mainnet-beta';
   static const String solanaDevnet = 'devnet';
@@ -136,6 +139,16 @@ class SupportedChains {
     type: ChainType.evm,
   );
 
+  // ILITY Chain (TODO: Replace with actual RPC/Explorer URLs when available)
+  static const ChainInfo ilityMainnet = ChainInfo(
+    chainId: ChainConstants.ilityMainnet,
+    name: 'ILITY',
+    symbol: 'ILT',
+    rpcUrl: 'https://rpc.ility.network',
+    explorerUrl: 'https://explorer.ility.network',
+    type: ChainType.evm,
+  );
+
   static const ChainInfo solanaMainnet = ChainInfo(
     cluster: ChainConstants.solanaMainnet,
     name: 'Solana',
@@ -157,6 +170,7 @@ class SupportedChains {
 
   /// All supported EVM chains
   static const List<ChainInfo> evmChains = [
+    ilityMainnet,
     ethereumMainnet,
     ethereumSepolia,
     polygonMainnet,

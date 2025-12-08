@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:wallet_integration_practice/core/core.dart';
 import 'package:wallet_integration_practice/domain/entities/transaction_entity.dart';
+import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
 import 'package:wallet_integration_practice/presentation/providers/wallet_provider.dart';
 import 'package:wallet_integration_practice/presentation/providers/chain_provider.dart';
 import 'package:wallet_integration_practice/presentation/widgets/wallet/wallet_card.dart';
 import 'package:wallet_integration_practice/presentation/widgets/wallet/wallet_selector.dart';
+import 'package:wallet_integration_practice/presentation/widgets/wallet/select_network_sheet.dart';
 import 'package:wallet_integration_practice/presentation/widgets/wallet/qr_code_display.dart';
 import 'package:wallet_integration_practice/presentation/widgets/wallet/connected_wallets_section.dart';
 import 'package:wallet_integration_practice/presentation/widgets/common/loading_overlay.dart';
@@ -20,12 +22,9 @@ class HomeScreen extends ConsumerStatefulWidget {
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
   bool _isConnecting = false;
-  String? _connectionUri;
 
   @override
   Widget build(BuildContext context) {
-    final selectedChain = ref.watch(chainSelectionProvider);
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('Wallet Integration Practice'),
@@ -51,34 +50,27 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Chain selector
-                _ChainSelector(
-                  selectedChain: selectedChain,
-                  onChainSelected: (chain) {
-                    ref.read(chainSelectionProvider.notifier).selectChain(chain);
-                  },
-                ),
-                const SizedBox(height: 24),
-
-                // Active wallet display (using multi-wallet state)
+                // 1. Active wallet display (Hero section - most important)
                 Consumer(
                   builder: (context, ref, _) {
                     final activeEntry = ref.watch(activeWalletEntryProvider);
 
                     if (activeEntry != null) {
-                      return Column(
-                        children: [
-                          WalletCard(
-                            wallet: activeEntry.wallet,
-                            onDisconnect: () => _disconnectActiveWallet(activeEntry.id),
-                            onSwitchChain: () => _showChainSelector(context),
-                          ),
-                          const SizedBox(height: 24),
-                          _ActionButtons(
-                            onSignMessage: () => _signMessage(context),
-                            onSendTransaction: () => _sendTransaction(context),
-                          ),
-                        ],
+                      // TODO: Replace with actual balance from blockchain
+                      const mockBalance = 1.2345;
+                      final wallet = activeEntry.wallet;
+
+                      // Get token symbol from wallet's own chainId/cluster
+                      final tokenSymbol = _getTokenSymbol(wallet);
+
+                      return WalletCard(
+                        wallet: wallet,
+                        onDisconnect: () => _disconnectActiveWallet(activeEntry.id),
+                        onSwitchChain: () => _showChainSelector(context),
+                        balance: mockBalance,
+                        tokenSymbol: tokenSymbol,
+                        onSignMessage: () => _signMessage(context),
+                        // onSendTransaction: null, // Disabled until implemented
                       );
                     }
                     return const SizedBox.shrink();
@@ -87,16 +79,22 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
                 const SizedBox(height: 16),
 
-                // Connected wallets section (multi-wallet list)
+                // 2. Connected wallets section (multi-wallet list)
                 ConnectedWalletsSection(
                   onConnectAnother: () => _showWalletSelector(context),
                 ),
 
-                // QR Code display (if connecting via WalletConnect)
-                if (_connectionUri != null) ...[
-                  const SizedBox(height: 24),
-                  QrCodeDisplay(uri: _connectionUri!),
-                ],
+                const SizedBox(height: 16),
+
+                // 3. Network selector (secondary - can be changed after wallet connection)
+                // _ChainSelector(
+                //   selectedChain: selectedChain,
+                //   onChainSelected: (chain) {
+                //     ref.read(chainSelectionProvider.notifier).selectChain(chain);
+                //   },
+                // ),
+
+                // QR Code is now shown as a modal, not inline
               ],
             ),
           ),
@@ -106,6 +104,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Future<void> _showWalletSelector(BuildContext context) async {
+    // Step 1: Show network selection first
+    final selectedChain = await SelectNetworkSheet.show(context);
+
+    // If user cancelled network selection, abort
+    if (selectedChain == null || !mounted) return;
+
+    // Step 2: Save selected chain to provider
+    ref.read(chainSelectionProvider.notifier).selectChain(selectedChain);
+
+    // Step 3: Show wallet selector
     await WalletSelector.show(
       context,
       onWalletSelected: (wallet) => _connectWallet(wallet),
@@ -115,7 +123,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   Future<void> _connectWallet(WalletInfo wallet) async {
     setState(() {
       _isConnecting = true;
-      _connectionUri = null;
     });
 
     try {
@@ -130,10 +137,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
       // Get connection URI for QR display
       final uri = await ref.read(walletNotifierProvider.notifier).getConnectionUri();
-      if (uri != null) {
+      if (uri != null && mounted) {
         setState(() {
-          _connectionUri = uri;
+          _isConnecting = false;
         });
+
+        // Show QR code modal
+        await QrCodeModal.show(
+          context,
+          uri: uri,
+          walletName: wallet.name,
+        );
       }
     } catch (e) {
       AppLogger.e('Connection error', e);
@@ -142,6 +156,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           SnackBar(
             content: Text('Connection failed: ${e.toString()}'),
             backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
+            ),
           ),
         );
       }
@@ -156,16 +174,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   Future<void> _disconnectActiveWallet(String walletId) async {
     await ref.read(multiWalletNotifierProvider.notifier).disconnectWallet(walletId);
-    setState(() {
-      _connectionUri = null;
-    });
-  }
-
-  Future<void> _disconnectWallet() async {
-    await ref.read(walletNotifierProvider.notifier).disconnect();
-    setState(() {
-      _connectionUri = null;
-    });
   }
 
   void _showChainSelector(BuildContext context) {
@@ -237,13 +245,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     }
   }
 
-  Future<void> _sendTransaction(BuildContext context) async {
-    // Show transaction dialog
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Transaction feature coming soon!'),
-      ),
-    );
+  /// Get token symbol from wallet's chainId or cluster
+  String _getTokenSymbol(WalletEntity wallet) {
+    if (wallet.chainId != null) {
+      final chain = SupportedChains.getByChainId(wallet.chainId!);
+      if (chain != null) return chain.symbol;
+    }
+    if (wallet.cluster != null) {
+      // Solana clusters
+      return 'SOL';
+    }
+    return 'ETH'; // default fallback
   }
 }
 
@@ -416,98 +428,7 @@ class _ChainSelectorSheet extends ConsumerWidget {
   }
 }
 
-class _ConnectWalletCard extends StatelessWidget {
-  final VoidCallback onConnect;
-
-  const _ConnectWalletCard({required this.onConnect});
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          children: [
-            Icon(
-              Icons.account_balance_wallet_outlined,
-              size: 64,
-              color: theme.colorScheme.primary,
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'Connect your wallet',
-              style: theme.textTheme.titleLarge,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Connect your crypto wallet to get started',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 24),
-            FilledButton.icon(
-              onPressed: onConnect,
-              icon: const Icon(Icons.link),
-              label: const Text('Connect Wallet'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ActionButtons extends StatelessWidget {
-  final VoidCallback onSignMessage;
-  final VoidCallback onSendTransaction;
-
-  const _ActionButtons({
-    required this.onSignMessage,
-    required this.onSendTransaction,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              'Actions',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: onSignMessage,
-                    icon: const Icon(Icons.edit),
-                    label: const Text('Sign Message'),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: FilledButton.icon(
-                    onPressed: onSendTransaction,
-                    icon: const Icon(Icons.send),
-                    label: const Text('Send TX'),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
+// Reserved for future use: Error state card
 class _ErrorCard extends StatelessWidget {
   final String message;
   final VoidCallback onRetry;

@@ -14,4 +14,5 @@ export 'widgets/common/loading_overlay.dart';
 // Widgets - Wallet
 export 'widgets/wallet/wallet_card.dart';
 export 'widgets/wallet/wallet_selector.dart';
+export 'widgets/wallet/select_network_sheet.dart';
 export 'widgets/wallet/qr_code_display.dart';

@@ -19,6 +19,16 @@ class WalletConnectAdapter extends EvmWalletAdapter {
   SessionData? _session;
   String? _uri;
 
+  /// The chainId that was requested during connect().
+  /// This is used instead of parsing from session accounts,
+  /// because the wallet may return accounts for multiple chains
+  /// and the first one may not be the requested chain.
+  int? _requestedChainId;
+
+  /// Get the chainId that was requested during the last connect() call.
+  /// Returns null if no connection has been requested yet.
+  int? get requestedChainId => _requestedChainId;
+
   /// Manages multiple accounts from the session
   SessionAccounts _sessionAccounts = const SessionAccounts.empty();
 
@@ -150,6 +160,7 @@ class WalletConnectAdapter extends EvmWalletAdapter {
   void _onSessionDelete(SessionDelete? event) {
     _session = null;
     _sessionAccounts = const SessionAccounts.empty();
+    _requestedChainId = null;
     _connectionController.add(WalletConnectionStatus.disconnected());
     AppLogger.wallet('Session deleted');
   }
@@ -254,7 +265,7 @@ class WalletConnectAdapter extends EvmWalletAdapter {
       final wallet = WalletEntity(
         address: connectedAddress!,
         type: walletType,
-        chainId: currentChainId,
+        chainId: _requestedChainId ?? currentChainId,
         sessionTopic: _session!.topic,
         connectedAt: DateTime.now(),
         metadata: {
@@ -300,6 +311,7 @@ class WalletConnectAdapter extends EvmWalletAdapter {
     }
 
     final targetChainId = chainId ?? 1; // Default to Ethereum mainnet
+    _requestedChainId = targetChainId; // Store for WalletEntity creation
     final maxRetries = AppConstants.maxConnectionRetries;
     int retryCount = 0;
 
@@ -373,7 +385,7 @@ class WalletConnectAdapter extends EvmWalletAdapter {
         final wallet = WalletEntity(
           address: connectedAddress!,
           type: walletType,
-          chainId: currentChainId,
+          chainId: _requestedChainId ?? currentChainId,
           sessionTopic: _session!.topic,
           connectedAt: DateTime.now(),
           metadata: {
@@ -388,6 +400,8 @@ class WalletConnectAdapter extends EvmWalletAdapter {
         AppLogger.wallet('Wallet connected', data: {
           'address': wallet.address,
           'chainId': wallet.chainId,
+          'requestedChainId': _requestedChainId,
+          'sessionChainId': currentChainId,
           'attempts': retryCount + 1,
           'accountCount': _sessionAccounts.count,
           'hasMultipleAccounts': hasMultipleAccounts,
@@ -462,6 +476,7 @@ class WalletConnectAdapter extends EvmWalletAdapter {
     } finally {
       _session = null;
       _uri = null;
+      _requestedChainId = null;
       _connectionController.add(WalletConnectionStatus.disconnected());
     }
   }
