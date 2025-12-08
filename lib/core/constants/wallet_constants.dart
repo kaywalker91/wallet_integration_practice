@@ -30,6 +30,8 @@ class WalletConstants {
 
   // Rabby
   static const String rabbyDeepLink = 'rabby://';
+  static const String rabbyPackageAndroid = 'com.debank.rabbymobile';
+  static const String rabbyAppStoreId = '6474381673';
 }
 
 /// Supported wallet types

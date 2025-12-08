@@ -8,6 +8,7 @@ import 'package:wallet_integration_practice/wallet/adapters/walletconnect_adapte
 import 'package:wallet_integration_practice/wallet/adapters/metamask_adapter.dart';
 import 'package:wallet_integration_practice/wallet/adapters/phantom_adapter.dart';
 import 'package:wallet_integration_practice/wallet/adapters/trust_wallet_adapter.dart';
+import 'package:wallet_integration_practice/wallet/adapters/rabby_wallet_adapter.dart';
 import 'package:wallet_integration_practice/wallet/models/wallet_adapter_config.dart';
 
 /// Wallet service that manages different wallet adapters.
@@ -104,9 +105,10 @@ class WalletService {
         return PhantomAdapter();
       case WalletType.trustWallet:
         return TrustWalletAdapter(config: _config);
+      case WalletType.rabby:
+        return RabbyWalletAdapter(config: _config);
       case WalletType.coinbase:
       case WalletType.rainbow:
-      case WalletType.rabby:
         // These wallets use WalletConnect
         return WalletConnectAdapter(config: _config);
     }
