@@ -195,10 +195,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Future<void> _signMessage(BuildContext context) async {
-    // Get active wallet from multi-wallet state
-    final activeEntry = ref.read(activeWalletEntryProvider);
-    if (activeEntry == null) return;
-    final wallet = activeEntry.wallet;
+    // Get the active account address (from session accounts or wallet)
+    final transactionAddress = ref.read(transactionAddressProvider);
+    if (transactionAddress == null) return;
 
     // Show sign message dialog
     final message = await showDialog<String>(
@@ -212,7 +211,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         final result = await service.personalSign(
           PersonalSignRequest(
             message: message,
-            address: wallet.address,
+            address: transactionAddress,
           ),
         );
 

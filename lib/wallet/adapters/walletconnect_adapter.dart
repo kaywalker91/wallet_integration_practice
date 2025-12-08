@@ -3,10 +3,15 @@ import 'package:reown_appkit/reown_appkit.dart';
 import 'package:wallet_integration_practice/core/core.dart';
 import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
 import 'package:wallet_integration_practice/domain/entities/transaction_entity.dart';
+import 'package:wallet_integration_practice/domain/entities/session_account.dart';
 import 'package:wallet_integration_practice/wallet/adapters/base_wallet_adapter.dart';
 import 'package:wallet_integration_practice/wallet/models/wallet_adapter_config.dart';
 
 /// WalletConnect v2 adapter implementation using Reown AppKit
+///
+/// Supports multiple accounts from a single wallet session.
+/// The wallet (e.g., MetaMask) decides which accounts to share,
+/// and this adapter manages which account is "active" for transactions.
 class WalletConnectAdapter extends EvmWalletAdapter {
   final WalletAdapterConfig _config;
 
@@ -14,10 +19,28 @@ class WalletConnectAdapter extends EvmWalletAdapter {
   SessionData? _session;
   String? _uri;
 
+  /// Manages multiple accounts from the session
+  SessionAccounts _sessionAccounts = const SessionAccounts.empty();
+
   final _connectionController = StreamController<WalletConnectionStatus>.broadcast();
+
+  /// Stream controller for account changes
+  final _accountsChangedController = StreamController<SessionAccounts>.broadcast();
 
   WalletConnectAdapter({WalletAdapterConfig? config})
       : _config = config ?? WalletAdapterConfig.defaultConfig();
+
+  /// Stream of account changes from the wallet
+  Stream<SessionAccounts> get accountsChangedStream => _accountsChangedController.stream;
+
+  /// Get current session accounts
+  SessionAccounts get sessionAccounts => _sessionAccounts;
+
+  /// Get the active account address for transactions
+  String? get activeAddress => _sessionAccounts.activeAccount?.address;
+
+  /// Check if session has multiple unique addresses
+  bool get hasMultipleAccounts => _sessionAccounts.hasMultipleAddresses;
 
   @override
   WalletType get walletType => WalletType.walletConnect;
@@ -30,11 +53,16 @@ class WalletConnectAdapter extends EvmWalletAdapter {
 
   @override
   String? get connectedAddress {
+    // Return active account address, or first account if no active set
+    if (_sessionAccounts.isNotEmpty) {
+      return activeAddress ?? _sessionAccounts.accounts.first.address;
+    }
+
+    // Fallback to parsing session directly
     if (_session == null) return null;
     try {
       final namespace = _session!.namespaces['eip155'];
       if (namespace == null || namespace.accounts.isEmpty) return null;
-      // Format: eip155:chainId:address
       final account = namespace.accounts.first;
       final parts = account.split(':');
       return parts.length >= 3 ? parts[2] : null;
@@ -84,6 +112,8 @@ class WalletConnectAdapter extends EvmWalletAdapter {
     // Listen to session events
     _appKit!.onSessionConnect.subscribe(_onSessionConnect);
     _appKit!.onSessionDelete.subscribe(_onSessionDelete);
+    _appKit!.onSessionEvent.subscribe(_onSessionEvent);
+    _appKit!.onSessionUpdate.subscribe(_onSessionUpdate);
 
     // Restore existing sessions
     await _restoreSession();
@@ -95,23 +125,128 @@ class WalletConnectAdapter extends EvmWalletAdapter {
     final sessions = _appKit!.sessions.getAll();
     if (sessions.isNotEmpty) {
       _session = sessions.first;
+      _parseSessionAccounts();
       _emitConnectionStatus();
-      AppLogger.wallet('Session restored', data: {'address': connectedAddress});
+      AppLogger.wallet('Session restored', data: {
+        'address': connectedAddress,
+        'accountCount': _sessionAccounts.count,
+      });
     }
   }
 
   void _onSessionConnect(SessionConnect? event) {
     if (event != null) {
       _session = event.session;
+      _parseSessionAccounts();
       _emitConnectionStatus();
-      AppLogger.wallet('Session connected', data: {'address': connectedAddress});
+      AppLogger.wallet('Session connected', data: {
+        'address': connectedAddress,
+        'accountCount': _sessionAccounts.count,
+        'hasMultipleAccounts': hasMultipleAccounts,
+      });
     }
   }
 
   void _onSessionDelete(SessionDelete? event) {
     _session = null;
+    _sessionAccounts = const SessionAccounts.empty();
     _connectionController.add(WalletConnectionStatus.disconnected());
     AppLogger.wallet('Session deleted');
+  }
+
+  /// Handle session events like accountsChanged and chainChanged
+  void _onSessionEvent(SessionEvent? event) {
+    if (event == null) return;
+
+    AppLogger.wallet('Session event received', data: {
+      'name': event.name,
+      'topic': event.topic,
+    });
+
+    switch (event.name) {
+      case 'accountsChanged':
+        _handleAccountsChanged(event.data);
+        break;
+      case 'chainChanged':
+        _handleChainChanged(event.data);
+        break;
+      default:
+        AppLogger.wallet('Unhandled session event: ${event.name}');
+    }
+  }
+
+  /// Handle session update (namespace changes)
+  void _onSessionUpdate(SessionUpdate? event) {
+    if (event == null) return;
+
+    AppLogger.wallet('Session update received', data: {
+      'topic': event.topic,
+    });
+
+    // Re-parse accounts from updated namespaces
+    if (_session != null && _session!.topic == event.topic) {
+      // Update session with new namespaces
+      _session = _appKit!.sessions.get(event.topic);
+      _parseSessionAccounts();
+      _accountsChangedController.add(_sessionAccounts);
+      _emitConnectionStatus();
+    }
+  }
+
+  /// Handle accountsChanged event from wallet
+  void _handleAccountsChanged(dynamic data) {
+    AppLogger.wallet('Accounts changed', data: {'data': data});
+
+    if (data is List) {
+      // Data is typically a list of account strings
+      final accountStrings = data.map((e) => e.toString()).toList();
+
+      // Check if these are CAIP-10 format or just addresses
+      if (accountStrings.isNotEmpty && accountStrings.first.contains(':')) {
+        // CAIP-10 format
+        _sessionAccounts = _sessionAccounts.updateAccounts(accountStrings);
+      } else {
+        // Just addresses - need to get full accounts from session
+        _parseSessionAccounts();
+      }
+
+      _accountsChangedController.add(_sessionAccounts);
+      _emitConnectionStatus();
+    }
+  }
+
+  /// Handle chainChanged event from wallet
+  void _handleChainChanged(dynamic data) {
+    AppLogger.wallet('Chain changed', data: {'data': data});
+    // Re-emit connection status with updated chain
+    _emitConnectionStatus();
+  }
+
+  /// Parse accounts from current session namespaces
+  void _parseSessionAccounts() {
+    if (_session == null) {
+      _sessionAccounts = const SessionAccounts.empty();
+      return;
+    }
+
+    try {
+      final namespace = _session!.namespaces['eip155'];
+      if (namespace == null || namespace.accounts.isEmpty) {
+        _sessionAccounts = const SessionAccounts.empty();
+        return;
+      }
+
+      _sessionAccounts = SessionAccounts.fromNamespaceAccounts(namespace.accounts);
+
+      AppLogger.wallet('Parsed session accounts', data: {
+        'count': _sessionAccounts.count,
+        'uniqueAddresses': _sessionAccounts.uniqueAddresses.length,
+        'activeAddress': _sessionAccounts.activeAddress,
+      });
+    } catch (e) {
+      AppLogger.e('Error parsing session accounts', e);
+      _sessionAccounts = const SessionAccounts.empty();
+    }
   }
 
   void _emitConnectionStatus() {
@@ -122,10 +257,41 @@ class WalletConnectAdapter extends EvmWalletAdapter {
         chainId: currentChainId,
         sessionTopic: _session!.topic,
         connectedAt: DateTime.now(),
+        metadata: {
+          'sessionAccounts': _sessionAccounts.accounts.map((a) => a.caip10Id).toList(),
+          'hasMultipleAccounts': hasMultipleAccounts,
+        },
       );
       _connectionController.add(WalletConnectionStatus.connected(wallet));
     }
   }
+
+  /// Set the active account for transactions.
+  ///
+  /// The address must be one of the accounts approved in the session.
+  /// Returns true if successful, false if address is not in session.
+  bool setActiveAccount(String address) {
+    if (!_sessionAccounts.containsAddress(address)) {
+      AppLogger.w(
+        'Cannot set active account: $address not in session. '
+        'Available: ${_sessionAccounts.uniqueAddresses}',
+      );
+      return false;
+    }
+
+    _sessionAccounts = _sessionAccounts.setActiveAddress(address);
+    _accountsChangedController.add(_sessionAccounts);
+    _emitConnectionStatus();
+
+    AppLogger.wallet('Active account changed', data: {
+      'newActiveAddress': address,
+    });
+
+    return true;
+  }
+
+  /// Get all session accounts (for UI display)
+  SessionAccounts getSessionAccounts() => _sessionAccounts;
 
   @override
   Future<WalletEntity> connect({int? chainId, String? cluster}) async {
@@ -194,6 +360,9 @@ class WalletConnectAdapter extends EvmWalletAdapter {
           },
         );
 
+        // Parse accounts from the approved session
+        _parseSessionAccounts();
+
         if (connectedAddress == null) {
           throw const WalletException(
             message: 'Failed to get connected address',
@@ -207,6 +376,11 @@ class WalletConnectAdapter extends EvmWalletAdapter {
           chainId: currentChainId,
           sessionTopic: _session!.topic,
           connectedAt: DateTime.now(),
+          metadata: {
+            'sessionAccounts': _sessionAccounts.accounts.map((a) => a.caip10Id).toList(),
+            'hasMultipleAccounts': hasMultipleAccounts,
+            'uniqueAddressCount': _sessionAccounts.uniqueAddresses.length,
+          },
         );
 
         _connectionController.add(WalletConnectionStatus.connected(wallet));
@@ -215,6 +389,8 @@ class WalletConnectAdapter extends EvmWalletAdapter {
           'address': wallet.address,
           'chainId': wallet.chainId,
           'attempts': retryCount + 1,
+          'accountCount': _sessionAccounts.count,
+          'hasMultipleAccounts': hasMultipleAccounts,
         });
 
         return wallet;
@@ -462,7 +638,10 @@ class WalletConnectAdapter extends EvmWalletAdapter {
   Future<void> dispose() async {
     _appKit?.onSessionConnect.unsubscribe(_onSessionConnect);
     _appKit?.onSessionDelete.unsubscribe(_onSessionDelete);
+    _appKit?.onSessionEvent.unsubscribe(_onSessionEvent);
+    _appKit?.onSessionUpdate.unsubscribe(_onSessionUpdate);
 
     await _connectionController.close();
+    await _accountsChangedController.close();
   }
 }

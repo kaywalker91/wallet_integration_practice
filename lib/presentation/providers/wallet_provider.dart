@@ -4,6 +4,7 @@ import 'package:wallet_integration_practice/core/core.dart';
 import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
 import 'package:wallet_integration_practice/domain/entities/connected_wallet_entry.dart';
 import 'package:wallet_integration_practice/domain/entities/multi_wallet_state.dart';
+import 'package:wallet_integration_practice/domain/entities/session_account.dart';
 import 'package:wallet_integration_practice/wallet/wallet.dart';
 
 /// Provider for DeepLinkService
@@ -575,4 +576,132 @@ final hasConnectingWalletProvider = Provider<bool>((ref) {
 /// Provider for checking if any wallet has error
 final hasErrorWalletProvider = Provider<bool>((ref) {
   return ref.watch(multiWalletNotifierProvider).hasErrorWallet;
+});
+
+// ============================================================================
+// Session Accounts Management (Multi-Account from Single Wallet)
+// ============================================================================
+
+/// Provider for session accounts stream
+final sessionAccountsStreamProvider = StreamProvider<SessionAccounts>((ref) {
+  final service = ref.watch(walletServiceProvider);
+  return service.accountsChangedStream;
+});
+
+/// Provider for current session accounts
+final sessionAccountsProvider = Provider<SessionAccounts>((ref) {
+  // Watch the stream for updates
+  final streamData = ref.watch(sessionAccountsStreamProvider);
+
+  // Return stream data if available, otherwise get from service
+  return streamData.when(
+    data: (accounts) => accounts,
+    loading: () => ref.read(walletServiceProvider).sessionAccounts,
+    error: (_, __) => ref.read(walletServiceProvider).sessionAccounts,
+  );
+});
+
+/// Provider for checking if session has multiple accounts
+final hasMultipleAccountsProvider = Provider<bool>((ref) {
+  final accounts = ref.watch(sessionAccountsProvider);
+  return accounts.hasMultipleAddresses;
+});
+
+/// Provider for active account address
+final activeAccountAddressProvider = Provider<String?>((ref) {
+  final accounts = ref.watch(sessionAccountsProvider);
+  return accounts.activeAddress;
+});
+
+/// Provider for active session account
+final activeSessionAccountProvider = Provider<SessionAccount?>((ref) {
+  final accounts = ref.watch(sessionAccountsProvider);
+  return accounts.activeAccount;
+});
+
+/// Provider for unique addresses in session
+final sessionAddressesProvider = Provider<List<String>>((ref) {
+  final accounts = ref.watch(sessionAccountsProvider);
+  return accounts.uniqueAddresses;
+});
+
+/// Provider for all session accounts list
+final sessionAccountsListProvider = Provider<List<SessionAccount>>((ref) {
+  final accounts = ref.watch(sessionAccountsProvider);
+  return accounts.accounts;
+});
+
+/// Notifier for managing active account selection
+class ActiveAccountNotifier extends Notifier<String?> {
+  @override
+  String? build() {
+    // Initialize with current active address from service
+    final accounts = ref.watch(sessionAccountsProvider);
+    return accounts.activeAddress;
+  }
+
+  /// Set the active account for transactions
+  bool setActiveAccount(String address) {
+    final service = ref.read(walletServiceProvider);
+    final success = service.setActiveAccount(address);
+    if (success) {
+      state = address;
+      AppLogger.wallet('Active account set via notifier', data: {
+        'address': address,
+      });
+    }
+    return success;
+  }
+
+  /// Reset to default (first account)
+  void resetToDefault() {
+    final accounts = ref.read(sessionAccountsProvider);
+    if (accounts.isNotEmpty) {
+      setActiveAccount(accounts.accounts.first.address);
+    }
+  }
+}
+
+/// Provider for active account notifier
+final activeAccountNotifierProvider = NotifierProvider<ActiveAccountNotifier, String?>(
+  ActiveAccountNotifier.new,
+);
+
+/// Provider for checking if account selector should be shown
+/// Returns true if connected and has multiple accounts
+final shouldShowAccountSelectorProvider = Provider<bool>((ref) {
+  final isConnected = ref.watch(isWalletConnectedProvider);
+  final hasMultiple = ref.watch(hasMultipleAccountsProvider);
+  return isConnected && hasMultiple;
+});
+
+/// Provider for getting the address to use for transactions.
+///
+/// Returns the active session account address if available,
+/// otherwise falls back to the connected wallet address.
+/// This should be used when creating transaction or signing requests.
+final transactionAddressProvider = Provider<String?>((ref) {
+  // First, try to get active session account address
+  final activeAccountAddress = ref.watch(activeAccountAddressProvider);
+  if (activeAccountAddress != null) {
+    return activeAccountAddress;
+  }
+
+  // Fallback to connected wallet address
+  final connectedWallet = ref.watch(connectedWalletProvider);
+  return connectedWallet?.address;
+});
+
+/// Provider for getting the address to use for transactions (non-null).
+///
+/// Throws if no address is available.
+final requiredTransactionAddressProvider = Provider<String>((ref) {
+  final address = ref.watch(transactionAddressProvider);
+  if (address == null) {
+    throw const WalletException(
+      message: 'No wallet address available for transaction',
+      code: 'NO_ADDRESS',
+    );
+  }
+  return address;
 });

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:wallet_integration_practice/core/core.dart';
 import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
 import 'package:wallet_integration_practice/domain/entities/transaction_entity.dart';
+import 'package:wallet_integration_practice/domain/entities/session_account.dart';
 import 'package:wallet_integration_practice/wallet/adapters/base_wallet_adapter.dart';
 import 'package:wallet_integration_practice/wallet/adapters/walletconnect_adapter.dart';
 import 'package:wallet_integration_practice/wallet/adapters/metamask_adapter.dart';
@@ -9,7 +10,11 @@ import 'package:wallet_integration_practice/wallet/adapters/phantom_adapter.dart
 import 'package:wallet_integration_practice/wallet/adapters/trust_wallet_adapter.dart';
 import 'package:wallet_integration_practice/wallet/models/wallet_adapter_config.dart';
 
-/// Wallet service that manages different wallet adapters
+/// Wallet service that manages different wallet adapters.
+///
+/// Supports multiple accounts from a single wallet session.
+/// The wallet decides which accounts to share, and this service
+/// manages which account is "active" for transactions.
 class WalletService {
   final WalletAdapterConfig _config;
   final Map<WalletType, BaseWalletAdapter> _adapters = {};
@@ -18,7 +23,9 @@ class WalletService {
   WalletEntity? _connectedWallet;
 
   final _connectionController = StreamController<WalletConnectionStatus>.broadcast();
+  final _accountsChangedController = StreamController<SessionAccounts>.broadcast();
   StreamSubscription? _adapterSubscription;
+  StreamSubscription? _accountsSubscription;
 
   WalletService({WalletAdapterConfig? config})
       : _config = config ?? WalletAdapterConfig.defaultConfig();
@@ -26,6 +33,10 @@ class WalletService {
   /// Stream of wallet connection status
   Stream<WalletConnectionStatus> get connectionStream =>
       _connectionController.stream;
+
+  /// Stream of session account changes
+  Stream<SessionAccounts> get accountsChangedStream =>
+      _accountsChangedController.stream;
 
   /// Currently connected wallet
   WalletEntity? get connectedWallet => _connectedWallet;
@@ -35,6 +46,30 @@ class WalletService {
 
   /// Get active adapter
   BaseWalletAdapter? get activeAdapter => _activeAdapter;
+
+  /// Check if current session has multiple accounts
+  bool get hasMultipleAccounts {
+    if (_activeAdapter is WalletConnectAdapter) {
+      return (_activeAdapter as WalletConnectAdapter).hasMultipleAccounts;
+    }
+    return false;
+  }
+
+  /// Get session accounts from active adapter
+  SessionAccounts get sessionAccounts {
+    if (_activeAdapter is WalletConnectAdapter) {
+      return (_activeAdapter as WalletConnectAdapter).sessionAccounts;
+    }
+    return const SessionAccounts.empty();
+  }
+
+  /// Get the active account address for transactions
+  String? get activeAddress {
+    if (_activeAdapter is WalletConnectAdapter) {
+      return (_activeAdapter as WalletConnectAdapter).activeAddress;
+    }
+    return _connectedWallet?.address;
+  }
 
   /// Initialize all adapters
   Future<void> initialize() async {
@@ -108,6 +143,18 @@ class WalletService {
         }
       });
 
+      // Subscribe to accounts changed stream if WalletConnect adapter
+      await _accountsSubscription?.cancel();
+      if (adapter is WalletConnectAdapter) {
+        _accountsSubscription = adapter.accountsChangedStream.listen((accounts) {
+          _accountsChangedController.add(accounts);
+          AppLogger.wallet('Session accounts updated', data: {
+            'count': accounts.count,
+            'activeAddress': accounts.activeAddress,
+          });
+        });
+      }
+
       // Connect
       final wallet = await adapter.connect(
         chainId: chainId,
@@ -117,10 +164,20 @@ class WalletService {
       _connectedWallet = wallet;
       _connectionController.add(WalletConnectionStatus.connected(wallet));
 
+      // Emit initial session accounts if available
+      if (adapter is WalletConnectAdapter) {
+        final accounts = adapter.sessionAccounts;
+        if (accounts.isNotEmpty) {
+          _accountsChangedController.add(accounts);
+        }
+      }
+
       AppLogger.wallet('Wallet connected', data: {
         'type': walletType.name,
         'address': wallet.address,
         'chainId': wallet.chainId,
+        'hasMultipleAccounts': hasMultipleAccounts,
+        'sessionAccountCount': sessionAccounts.count,
       });
 
       return wallet;
@@ -163,6 +220,7 @@ class WalletService {
       _connectedWallet = null;
       _activeAdapter = null;
       await _adapterSubscription?.cancel();
+      await _accountsSubscription?.cancel();
       _connectionController.add(WalletConnectionStatus.disconnected());
 
       AppLogger.wallet('Wallet disconnected');
@@ -178,6 +236,35 @@ class WalletService {
   /// Get connection URI for QR code display
   Future<String?> getConnectionUri() async {
     return _activeAdapter?.getConnectionUri();
+  }
+
+  /// Set the active account for transactions.
+  ///
+  /// The address must be one of the accounts approved in the session.
+  /// Returns true if successful, false if the address is not in the session.
+  bool setActiveAccount(String address) {
+    if (_activeAdapter is WalletConnectAdapter) {
+      final success = (_activeAdapter as WalletConnectAdapter).setActiveAccount(address);
+      if (success) {
+        // Update connected wallet with new active address
+        if (_connectedWallet != null) {
+          _connectedWallet = _connectedWallet!.copyWith(address: address);
+          _connectionController.add(WalletConnectionStatus.connected(_connectedWallet!));
+        }
+      }
+      return success;
+    }
+    return false;
+  }
+
+  /// Get all unique addresses from the session
+  List<String> getSessionAddresses() {
+    return sessionAccounts.uniqueAddresses;
+  }
+
+  /// Get all session accounts with full details
+  List<SessionAccount> getSessionAccountsList() {
+    return sessionAccounts.accounts;
   }
 
   /// Switch to a different chain
@@ -288,6 +375,7 @@ class WalletService {
   /// Dispose all resources
   Future<void> dispose() async {
     await _adapterSubscription?.cancel();
+    await _accountsSubscription?.cancel();
 
     for (final adapter in _adapters.values) {
       await adapter.dispose();
@@ -295,5 +383,6 @@ class WalletService {
 
     _adapters.clear();
     await _connectionController.close();
+    await _accountsChangedController.close();
   }
 }
