@@ -216,13 +216,9 @@ class _WalletList extends StatelessWidget {
       itemBuilder: (context, index) {
         final entry = wallets[index];
 
-        // TODO: In production, fetch actual balance from blockchain
-        // For now, using mock data based on wallet index
-        final mockBalance = _getMockBalance(index);
-
-        return ConnectedWalletTile(
+        // Use ConnectedWalletTileWithBalance for automatic balance fetching
+        return ConnectedWalletTileWithBalance(
           entry: entry,
-          balance: mockBalance,
           onMakeActive: () => onMakeActive(entry.id),
           onDisconnect: () => onDisconnect(entry.id),
           onRetry: () => onRetry(entry.id),
@@ -230,19 +226,5 @@ class _WalletList extends StatelessWidget {
         );
       },
     );
-  }
-
-  /// Mock balance for demonstration
-  /// TODO: Replace with actual balance fetching from blockchain
-  double? _getMockBalance(int index) {
-    // Return different mock balances for different wallets
-    final mockBalances = [
-      11223344.98,
-      5432.10,
-      1000000.00,
-      0.0,
-      null, // Unknown balance
-    ];
-    return mockBalances[index % mockBalances.length];
   }
 }

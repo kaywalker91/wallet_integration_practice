@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wallet_integration_practice/core/core.dart';
 import 'package:wallet_integration_practice/presentation/presentation.dart';
 
@@ -28,9 +29,16 @@ void main() async {
   // Initialize deep link service
   await DeepLinkService.instance.initialize();
 
+  // Initialize SharedPreferences for balance caching
+  final sharedPreferences = await SharedPreferences.getInstance();
+
   runApp(
-    const ProviderScope(
-      child: WalletIntegrationApp(),
+    ProviderScope(
+      overrides: [
+        // Override the SharedPreferences provider with the initialized instance
+        sharedPreferencesProvider.overrideWithValue(sharedPreferences),
+      ],
+      child: const WalletIntegrationApp(),
     ),
   );
 }

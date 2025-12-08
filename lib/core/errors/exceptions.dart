@@ -49,3 +49,12 @@ class ChainException extends AppException {
     super.originalException,
   });
 }
+
+/// Balance-related exceptions
+class BalanceException extends AppException {
+  const BalanceException({
+    required super.message,
+    super.code,
+    super.originalException,
+  });
+}

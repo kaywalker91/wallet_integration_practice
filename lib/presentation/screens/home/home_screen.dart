@@ -5,6 +5,7 @@ import 'package:wallet_integration_practice/domain/entities/transaction_entity.d
 import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
 import 'package:wallet_integration_practice/presentation/providers/wallet_provider.dart';
 import 'package:wallet_integration_practice/presentation/providers/chain_provider.dart';
+import 'package:wallet_integration_practice/presentation/providers/balance_provider.dart';
 import 'package:wallet_integration_practice/presentation/widgets/wallet/wallet_card.dart';
 import 'package:wallet_integration_practice/presentation/widgets/wallet/wallet_selector.dart';
 import 'package:wallet_integration_practice/presentation/widgets/wallet/select_network_sheet.dart';
@@ -56,18 +57,29 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     final activeEntry = ref.watch(activeWalletEntryProvider);
 
                     if (activeEntry != null) {
-                      // TODO: Replace with actual balance from blockchain
-                      const mockBalance = 1.2345;
                       final wallet = activeEntry.wallet;
 
                       // Get token symbol from wallet's own chainId/cluster
                       final tokenSymbol = _getTokenSymbol(wallet);
 
+                      // Watch actual balance from blockchain
+                      final balanceAsync = ref.watch(currentChainBalanceProvider);
+
+                      // Log for debugging
+                      AppLogger.d('[DEBUG] HomeScreen: balanceAsync state = ${balanceAsync.isLoading ? "loading" : balanceAsync.hasError ? "error" : "data"}');
+
+                      final balance = balanceAsync.whenOrNull(
+                        data: (entity) {
+                          AppLogger.d('[DEBUG] HomeScreen: balance entity = $entity');
+                          return entity?.balanceFormatted;
+                        },
+                      );
+
                       return WalletCard(
                         wallet: wallet,
                         onDisconnect: () => _disconnectActiveWallet(activeEntry.id),
                         onSwitchChain: () => _showChainSelector(context),
-                        balance: mockBalance,
+                        balance: balance,
                         tokenSymbol: tokenSymbol,
                         onSignMessage: () => _signMessage(context),
                         // onSendTransaction: null, // Disabled until implemented

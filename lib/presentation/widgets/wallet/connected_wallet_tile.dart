@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:wallet_integration_practice/core/core.dart';
+import 'package:wallet_integration_practice/core/constants/chain_constants.dart';
 import 'package:wallet_integration_practice/domain/entities/connected_wallet_entry.dart';
 import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
+import 'package:wallet_integration_practice/presentation/providers/balance_provider.dart';
 
 /// A compact tile widget representing a single wallet in the connected wallets list.
 ///
@@ -710,6 +713,66 @@ class ActiveWalletBadge extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+// ============================================================================
+// Auto-Balance Wrapper
+// ============================================================================
+
+/// A wrapper widget that automatically fetches balance for a ConnectedWalletTile.
+///
+/// Use this instead of [ConnectedWalletTile] when you want automatic
+/// balance fetching based on the wallet's chain.
+class ConnectedWalletTileWithBalance extends ConsumerWidget {
+  final ConnectedWalletEntry entry;
+  final VoidCallback? onMakeActive;
+  final VoidCallback? onDisconnect;
+  final VoidCallback? onRetry;
+  final VoidCallback? onRemove;
+
+  const ConnectedWalletTileWithBalance({
+    super.key,
+    required this.entry,
+    this.onMakeActive,
+    this.onDisconnect,
+    this.onRetry,
+    this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Determine the chain for this wallet
+    final wallet = entry.wallet;
+    ChainInfo? chain;
+
+    if (wallet.chainId != null) {
+      chain = SupportedChains.getByChainId(wallet.chainId!);
+    } else if (wallet.cluster != null) {
+      chain = SupportedChains.solanaChains
+          .where((c) => c.cluster == wallet.cluster)
+          .firstOrNull;
+    }
+
+    // Fetch balance if chain is known
+    double? balance;
+    if (chain != null && entry.status == WalletEntryStatus.connected) {
+      final balanceAsync = ref.watch(chainBalanceProvider(chain));
+      balance = balanceAsync.when(
+        data: (b) => b?.balanceFormatted,
+        loading: () => null,
+        error: (_, __) => null,
+      );
+    }
+
+    return ConnectedWalletTile(
+      entry: entry,
+      balance: balance,
+      onMakeActive: onMakeActive,
+      onDisconnect: onDisconnect,
+      onRetry: onRetry,
+      onRemove: onRemove,
     );
   }
 }

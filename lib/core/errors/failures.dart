@@ -174,3 +174,56 @@ class StorageFailure extends Failure {
     );
   }
 }
+
+/// Balance query failures
+class BalanceFailure extends Failure {
+  const BalanceFailure({
+    required super.message,
+    super.code,
+    super.originalError,
+  });
+
+  factory BalanceFailure.rpcError(String chainName, dynamic error) {
+    return BalanceFailure(
+      message: 'Failed to fetch balance from $chainName',
+      code: 'RPC_ERROR',
+      originalError: error,
+    );
+  }
+
+  factory BalanceFailure.invalidAddress(String address) {
+    return BalanceFailure(
+      message: 'Invalid address format: $address',
+      code: 'INVALID_ADDRESS',
+    );
+  }
+
+  factory BalanceFailure.timeout(String chainName) {
+    return BalanceFailure(
+      message: 'Balance request timed out for $chainName',
+      code: 'TIMEOUT',
+    );
+  }
+
+  factory BalanceFailure.unsupportedChain(int? chainId, String? cluster) {
+    return BalanceFailure(
+      message: 'Unsupported chain: ${chainId ?? cluster}',
+      code: 'UNSUPPORTED_CHAIN',
+    );
+  }
+
+  factory BalanceFailure.tokenNotFound(String contractAddress) {
+    return BalanceFailure(
+      message: 'Token not found: $contractAddress',
+      code: 'TOKEN_NOT_FOUND',
+    );
+  }
+
+  factory BalanceFailure.unknown(dynamic error) {
+    return BalanceFailure(
+      message: 'Failed to fetch balance: ${error.toString()}',
+      code: 'UNKNOWN',
+      originalError: error,
+    );
+  }
+}
