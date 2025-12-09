@@ -1,5 +1,6 @@
 import 'dart:async' show Completer, StreamSubscription, unawaited;
 import 'dart:io';
+import 'package:reown_appkit/reown_appkit.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wallet_integration_practice/core/core.dart';
 import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
@@ -40,51 +41,72 @@ class RabbyWalletAdapter extends WalletConnectAdapter {
   }
 
   /// Open Rabby Wallet with WalletConnect URI
-  /// Tries multiple deep link formats for compatibility
-  /// Throws [WalletNotInstalledException] if Rabby Wallet is not installed
   Future<bool> openWithUri(String wcUri) async {
     AppLogger.wallet('Attempting to open Rabby with WC URI', data: {
       'uriLength': wcUri.length,
       'uriPrefix': wcUri.substring(0, wcUri.length > 50 ? 50 : wcUri.length),
     });
 
-    // Try different deep link formats
-    final deepLinkFormats = [
-      // Standard WalletConnect format
-      'rabby://wc?uri=${Uri.encodeComponent(wcUri)}',
-      // Direct WC URI format
-      'rabby://${wcUri.replaceFirst('wc:', '')}',
-      // Universal link format (fallback)
-      'https://rabby.io/wc?uri=${Uri.encodeComponent(wcUri)}',
-    ];
+    final encodedUri = Uri.encodeComponent(wcUri);
 
-    for (final deepLink in deepLinkFormats) {
-      try {
-        AppLogger.wallet('Trying deep link format', data: {
-          'format': deepLink.substring(0, deepLink.length > 80 ? 80 : deepLink.length),
-        });
-
-        final uri = Uri.parse(deepLink);
-
-        // Try to launch directly without checking canLaunchUrl first
-        // (canLaunchUrl is unreliable on Android 11+)
-        final launched = await launchUrl(
-          uri,
-          mode: LaunchMode.externalApplication,
-        );
-
-        if (launched) {
-          AppLogger.wallet('Successfully launched Rabby with deep link');
-          return true;
-        }
-      } catch (e) {
-        AppLogger.w('Deep link format failed: $e');
-        continue;
+    // 1. Try Custom Scheme (rabby://wc?uri=...)
+    // This is the most standard way for specific wallet Deep Links
+    final schemeUrl = 'rabby://wc?uri=$encodedUri';
+    
+    try {
+      final schemeUri = Uri.parse(schemeUrl);
+      // We check canLaunchUrl, but on Android 11+ it might return false even if installed
+      // so we try to launch anyway if it fails the check or if we want to force it
+      
+      final launchedScheme = await launchUrl(
+        schemeUri,
+        mode: LaunchMode.externalApplication,
+      );
+      
+      if (launchedScheme) {
+        AppLogger.wallet('Successfully launched Rabby Custom Scheme');
+        return true;
       }
+    } catch (e) {
+      AppLogger.w('Rabby Custom Scheme failed: $e');
     }
 
-    // All formats failed - wallet is not installed
-    AppLogger.w('All deep link formats failed, Rabby not installed');
+    // 2. Try Universal Link (https://rabby.io/wc?uri=...)
+    // Fallback if custom scheme fails
+    final universalUrl = 'https://rabby.io/wc?uri=$encodedUri';
+    
+    try {
+      final universalUri = Uri.parse(universalUrl);
+      final launchedUniversal = await launchUrl(
+        universalUri,
+        mode: LaunchMode.externalApplication,
+      );
+      
+      if (launchedUniversal) {
+        AppLogger.wallet('Successfully launched Rabby Universal Link');
+        return true;
+      }
+    } catch (e) {
+      AppLogger.w('Rabby Universal Link failed: $e');
+    }
+
+    // 3. Fallback to raw wc: URI (OS picker)
+    try {
+        final rawUri = Uri.parse(wcUri);
+        final launchedRaw = await launchUrl(
+            rawUri,
+            mode: LaunchMode.externalApplication,
+        );
+        if (launchedRaw) {
+             AppLogger.wallet('Launched raw WC URI');
+             return true;
+        }
+    } catch (e) {
+        AppLogger.w('Raw WC URI launch failed: $e');
+    }
+
+    // All formats failed
+    AppLogger.w('All Rabby deep link formats failed');
     throw WalletNotInstalledException(
       walletType: walletType.name,
       message: 'Rabby Wallet is not installed',
@@ -132,6 +154,16 @@ class RabbyWalletAdapter extends WalletConnectAdapter {
 
     AppLogger.w('URI generation timed out after ${timeout.inSeconds}s');
     return null;
+  }
+
+  @override
+  bool isSessionValid(SessionData session) {
+    final name = session.peer?.metadata.name.toLowerCase() ?? '';
+    final isValid = name.contains('rabby');
+    if (!isValid) {
+      AppLogger.d('RabbyWalletAdapter ignored session for: $name');
+    }
+    return isValid;
   }
 
   @override

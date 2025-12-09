@@ -87,35 +87,52 @@ class DeepLinkService {
     final host = uri.host;
     final path = uri.path;
 
-    AppLogger.d('Routing wallet callback: scheme=$scheme, host=$host, path=$path');
+    AppLogger.i('🔔 Routing wallet callback: scheme=$scheme, host=$host, path=$path');
+    AppLogger.i('📋 Registered handlers: ${_handlers.keys.toList()}');
 
     // Phantom callback: wip://phantom/callback?...
     if (host == 'phantom' || path.contains('phantom')) {
       if (_handlers.containsKey('phantom')) {
+        AppLogger.i('✅ Found phantom handler, invoking...');
         await _handlers['phantom']!(uri);
         return;
+      } else {
+        AppLogger.e('❌ Phantom handler NOT registered! Available: ${_handlers.keys.toList()}');
       }
     }
 
     // MetaMask callback: wip://metamask/callback?...
     if (host == 'metamask' || path.contains('metamask')) {
       if (_handlers.containsKey('metamask')) {
+        AppLogger.i('✅ Found metamask handler, invoking...');
         await _handlers['metamask']!(uri);
         return;
+      } else {
+        AppLogger.e('❌ MetaMask handler NOT registered! Available: ${_handlers.keys.toList()}');
       }
     }
 
     // WalletConnect callback: wip://wc?...
     if (host == 'wc' || path.contains('wc')) {
       if (_handlers.containsKey('walletconnect')) {
+        AppLogger.i('✅ Found walletconnect handler, invoking...');
         await _handlers['walletconnect']!(uri);
         return;
+      } else if (_handlers.containsKey('wc')) {
+        AppLogger.i('✅ Found wc handler, invoking...');
+        await _handlers['wc']!(uri);
+        return;
+      } else {
+        AppLogger.e('❌ WalletConnect handler NOT registered! Available: ${_handlers.keys.toList()}');
       }
     }
 
     // Generic callback handler
     if (_handlers.containsKey('default')) {
+      AppLogger.i('Using default handler');
       await _handlers['default']!(uri);
+    } else {
+      AppLogger.w('⚠️ No handler found for URI: $uri');
     }
   }
 

@@ -6,6 +6,7 @@ import 'package:wallet_integration_practice/domain/entities/connected_wallet_ent
 import 'package:wallet_integration_practice/domain/entities/multi_wallet_state.dart';
 import 'package:wallet_integration_practice/domain/entities/session_account.dart';
 import 'package:wallet_integration_practice/wallet/wallet.dart';
+import 'package:wallet_integration_practice/presentation/providers/balance_provider.dart';
 
 /// Provider for DeepLinkService
 final deepLinkServiceProvider = Provider<DeepLinkService>((ref) {
@@ -16,6 +17,15 @@ final deepLinkServiceProvider = Provider<DeepLinkService>((ref) {
 final deepLinkStreamProvider = StreamProvider<Uri>((ref) {
   final service = ref.watch(deepLinkServiceProvider);
   return service.deepLinkStream;
+});
+
+/// Provider for PendingConnectionService
+///
+/// 앱이 백그라운드에서 종료된 후 Cold Start 시,
+/// 대기 중인 연결 상태를 복원하기 위한 서비스
+final pendingConnectionServiceProvider = Provider<PendingConnectionService>((ref) {
+  final prefs = ref.watch(sharedPreferencesProvider);
+  return PendingConnectionService(prefs);
 });
 
 /// Provider for WalletService
@@ -114,45 +124,14 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
   }
 
   Future<void> _init() async {
+    // Initialize wallet service (also registers deep link handlers)
     await _walletService.initialize();
     if (_walletService.connectedWallet != null) {
       state = AsyncValue.data(_walletService.connectedWallet);
     }
 
-    // Register deep link handlers
-    _setupDeepLinkHandlers();
-  }
-
-  void _setupDeepLinkHandlers() {
-    final deepLinkService = DeepLinkService.instance;
-
-    // Register handler for Phantom callbacks
-    deepLinkService.registerHandler('phantom', (uri) async {
-      await _walletService.handleDeepLink(uri);
-    });
-
-    // Register handler for MetaMask callbacks
-    deepLinkService.registerHandler('metamask', (uri) async {
-      await _walletService.handleDeepLink(uri);
-    });
-
-    // Register handler for WalletConnect callbacks
-    deepLinkService.registerHandler('wc', (uri) async {
-      await _walletService.handleDeepLink(uri);
-    });
-
-    // Register handler for Trust Wallet callbacks
-    deepLinkService.registerHandler('trust', (uri) async {
-      await _walletService.handleDeepLink(uri);
-    });
-
-    // Register handler for Rabby callbacks
-    deepLinkService.registerHandler('rabby', (uri) async {
-      await _walletService.handleDeepLink(uri);
-    });
-
-    // Subscribe to deep link stream for general handling
-    _deepLinkSubscription = deepLinkService.deepLinkStream.listen((uri) {
+    // Subscribe to deep link stream for logging
+    _deepLinkSubscription = DeepLinkService.instance.deepLinkStream.listen((uri) {
       AppLogger.d('WalletNotifier received deep link: $uri');
     });
   }

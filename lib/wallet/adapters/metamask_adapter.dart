@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:reown_appkit/reown_appkit.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wallet_integration_practice/core/core.dart';
 import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
@@ -38,25 +39,38 @@ class MetaMaskAdapter extends WalletConnectAdapter {
   /// Throws [WalletNotInstalledException] if MetaMask is not installed
   Future<bool> openWithUri(String wcUri) async {
     try {
-      // Encode the WalletConnect URI for MetaMask deep link
+      // 1. Try Custom Scheme (metamask://)
+      // This is preferred as it opens the app directly if installed
       final encodedUri = Uri.encodeComponent(wcUri);
-      final deepLink = 'metamask://wc?uri=$encodedUri';
+      final schemeUrl = 'metamask://wc?uri=$encodedUri';
+      final schemeUri = Uri.parse(schemeUrl);
 
-      final uri = Uri.parse(deepLink);
-      final launched = await launchUrl(
-        uri,
+      // Check if scheme calls are supported/can be handled
+      if (await canLaunchUrl(schemeUri)) {
+        final launched = await launchUrl(
+          schemeUri,
+          mode: LaunchMode.externalApplication,
+        );
+        if (launched) return true;
+      }
+
+      // 2. Try Universal Link (HTTPS)
+      // This serves as a fallback that handles "open app or go to store" logic usually
+      final universalUrl = 'https://metamask.app.link/wc?uri=$encodedUri';
+      final universalUri = Uri.parse(universalUrl);
+      
+      final launchedUniversal = await launchUrl(
+        universalUri,
         mode: LaunchMode.externalApplication,
       );
 
-      if (!launched) {
-        // launchUrl returned false = app not installed
-        throw WalletNotInstalledException(
-          walletType: walletType.name,
-          message: 'MetaMask is not installed',
-        );
-      }
+      if (launchedUniversal) return true;
 
-      return true;
+      // 3. Both failed - assume not installed
+      throw WalletNotInstalledException(
+        walletType: walletType.name,
+        message: 'MetaMask is not installed',
+      );
     } catch (e) {
       if (e is WalletNotInstalledException) rethrow;
       AppLogger.e('Error opening MetaMask with URI', e);
@@ -85,6 +99,16 @@ class MetaMaskAdapter extends WalletConnectAdapter {
     } catch (e) {
       AppLogger.e('Error opening app store', e);
     }
+  }
+
+  @override
+  bool isSessionValid(SessionData session) {
+    final name = session.peer?.metadata.name.toLowerCase() ?? '';
+    final isValid = name.contains('metamask');
+    if (!isValid) {
+      AppLogger.d('MetaMaskAdapter ignored session for: $name');
+    }
+    return isValid;
   }
 
   @override

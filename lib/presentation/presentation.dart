@@ -8,6 +8,7 @@ export 'providers/balance_provider.dart';
 
 // Screens
 export 'screens/home/home_screen.dart';
+export 'screens/onboarding/onboarding_loading_page.dart';
 
 // Widgets - Common
 export 'widgets/common/loading_overlay.dart';

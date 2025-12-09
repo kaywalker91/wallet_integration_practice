@@ -55,7 +55,7 @@ class WalletIntegrationApp extends StatelessWidget {
       theme: _buildLightTheme(),
       darkTheme: _buildDarkTheme(),
       themeMode: ThemeMode.system,
-      home: const HomeScreen(),
+      home: const _AppStartupHandler(),
     );
   }
 
@@ -213,5 +213,48 @@ class WalletIntegrationApp extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// 앱 시작 시 대기 중 연결 확인 및 적절한 화면으로 라우팅
+///
+/// Cold Start 시 이전에 저장된 대기 중 연결이 있으면
+/// OnboardingLoadingPage로 자동 네비게이션합니다.
+class _AppStartupHandler extends ConsumerStatefulWidget {
+  const _AppStartupHandler();
+
+  @override
+  ConsumerState<_AppStartupHandler> createState() => _AppStartupHandlerState();
+}
+
+class _AppStartupHandlerState extends ConsumerState<_AppStartupHandler> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkPendingConnection();
+    });
+  }
+
+  void _checkPendingConnection() {
+    final pendingService = ref.read(pendingConnectionServiceProvider);
+    final pendingWalletType = pendingService.getPendingConnection();
+
+    if (pendingWalletType != null) {
+      AppLogger.i('Found pending connection for: ${pendingWalletType.name}');
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (context) => OnboardingLoadingPage(
+            walletType: pendingWalletType,
+            isRestoring: true, // Skip re-initiating connection, just wait for session
+          ),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return const HomeScreen();
   }
 }

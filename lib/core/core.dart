@@ -20,3 +20,4 @@ export 'utils/wallet_utils.dart';
 
 // Services
 export 'services/deep_link_service.dart';
+export 'services/pending_connection_service.dart';

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:wallet_integration_practice/core/core.dart';
+import 'package:wallet_integration_practice/core/services/deep_link_service.dart';
 import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
 import 'package:wallet_integration_practice/domain/entities/transaction_entity.dart';
 import 'package:wallet_integration_practice/domain/entities/session_account.dart';
@@ -29,7 +30,9 @@ class WalletService {
   StreamSubscription? _accountsSubscription;
 
   WalletService({WalletAdapterConfig? config})
-      : _config = config ?? WalletAdapterConfig.defaultConfig();
+      : _config = config ?? WalletAdapterConfig.defaultConfig() {
+    _setupDeepLinkHandlers();
+  }
 
   /// Stream of wallet connection status
   Stream<WalletConnectionStatus> get connectionStream =>
@@ -76,10 +79,52 @@ class WalletService {
   Future<void> initialize() async {
     AppLogger.wallet('Initializing wallet service');
 
+    // Register deep link handlers for wallet callbacks
+    _setupDeepLinkHandlers();
+
     // Initialize adapters lazily on first use
     // This prevents unnecessary initialization of unused adapters
 
     AppLogger.wallet('Wallet service initialized');
+  }
+
+  /// Setup deep link handlers for wallet app callbacks
+  void _setupDeepLinkHandlers() {
+    final deepLinkService = DeepLinkService.instance;
+
+    // Phantom callback handler
+    deepLinkService.registerHandler('phantom', (uri) async {
+      AppLogger.wallet('📱 Phantom deep link handler invoked', data: {'uri': uri.toString()});
+      await handleDeepLink(uri);
+    });
+
+    // MetaMask callback handler
+    deepLinkService.registerHandler('metamask', (uri) async {
+      AppLogger.wallet('📱 MetaMask deep link handler invoked', data: {'uri': uri.toString()});
+      await handleDeepLink(uri);
+    });
+
+    // WalletConnect callback handler
+    deepLinkService.registerHandler('wc', (uri) async {
+      AppLogger.wallet('📱 WalletConnect deep link handler invoked', data: {'uri': uri.toString()});
+      await handleDeepLink(uri);
+    });
+
+    // Trust Wallet callback handler
+    deepLinkService.registerHandler('trust', (uri) async {
+      AppLogger.wallet('📱 Trust Wallet deep link handler invoked', data: {'uri': uri.toString()});
+      await handleDeepLink(uri);
+    });
+
+    // Rabby callback handler
+    deepLinkService.registerHandler('rabby', (uri) async {
+      AppLogger.wallet('📱 Rabby deep link handler invoked', data: {'uri': uri.toString()});
+      await handleDeepLink(uri);
+    });
+
+    AppLogger.wallet('✅ Deep link handlers registered', data: {
+      'handlers': ['phantom', 'metamask', 'wc', 'trust', 'rabby'],
+    });
   }
 
   /// Get or create adapter for wallet type
@@ -356,7 +401,12 @@ class WalletService {
 
   /// Handle deep link callback from wallet apps
   Future<void> handleDeepLink(Uri uri) async {
-    AppLogger.wallet('Handling deep link in WalletService', data: {'uri': uri.toString()});
+    AppLogger.wallet('🔗 Handling deep link in WalletService', data: {
+      'uri': uri.toString(),
+      'scheme': uri.scheme,
+      'host': uri.host,
+      'path': uri.path,
+    });
 
     final host = uri.host;
     final path = uri.path;
@@ -364,14 +414,24 @@ class WalletService {
     // Route to appropriate adapter
     if (host == 'phantom' || path.contains('phantom')) {
       final phantomAdapter = _adapters[WalletType.phantom];
+      AppLogger.wallet('🔍 Looking for Phantom adapter', data: {
+        'found': phantomAdapter != null,
+        'isPhantomAdapter': phantomAdapter is PhantomAdapter,
+        'availableAdapters': _adapters.keys.map((k) => k.name).toList(),
+      });
+
       if (phantomAdapter is PhantomAdapter) {
+        AppLogger.wallet('✅ Routing to Phantom adapter');
         await phantomAdapter.handleDeepLinkCallback(uri);
+      } else {
+        AppLogger.e('❌ Phantom adapter not found! Deep link will be ignored.');
       }
     } else if (host == 'trust' || path.contains('trust')) {
       // Trust Wallet uses WalletConnect, callback handled by WC session
       AppLogger.wallet('Trust Wallet deep link received', data: {'uri': uri.toString()});
+    } else {
+      AppLogger.wallet('⚠️ Unhandled deep link', data: {'host': host, 'path': path});
     }
-    // Add more wallet-specific deep link handling as needed
   }
 
   /// Dispose all resources

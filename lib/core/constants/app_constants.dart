@@ -19,6 +19,9 @@ class AppConstants {
   static const String deepLinkScheme = 'wip';
   static const String universalLinkHost = 'ility.io';
 
+  // dApp URL for in-app browser connections (e.g., Rabby)
+  static const String dappUrl = 'https://app.ility.io';
+
   // Storage Keys
   static const String walletSessionKey = 'wallet_session';
   static const String connectedWalletKey = 'connected_wallet';

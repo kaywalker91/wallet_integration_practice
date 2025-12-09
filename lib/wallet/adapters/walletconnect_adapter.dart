@@ -131,16 +131,34 @@ class WalletConnectAdapter extends EvmWalletAdapter {
     AppLogger.wallet('WalletConnect adapter initialized');
   }
 
+  /// Check if a session matches the expected wallet type.
+  /// Subclasses should override this to filter sessions by wallet name.
+  bool isSessionValid(SessionData session) {
+    return true; // Default: accept any session
+  }
+
   Future<void> _restoreSession() async {
     final sessions = _appKit!.sessions.getAll();
-    if (sessions.isNotEmpty) {
-      _session = sessions.first;
-      _parseSessionAccounts();
-      _emitConnectionStatus();
-      AppLogger.wallet('Session restored', data: {
-        'address': connectedAddress,
-        'accountCount': _sessionAccounts.count,
-      });
+    
+    // Find the first session that matches our validation logic
+    for (final session in sessions) {
+      if (isSessionValid(session)) {
+        _session = session;
+        _parseSessionAccounts();
+        _emitConnectionStatus();
+        
+        AppLogger.wallet('Session restored', data: {
+          'address': connectedAddress,
+          'accountCount': _sessionAccounts.count,
+          'topic': _session!.topic,
+          'peerName': _session!.peer?.metadata.name,
+        });
+        return; // Stop after finding the first valid session
+      }
+    }
+    
+    if (sessions.isNotEmpty && _session == null) {
+      AppLogger.wallet('Found ${sessions.length} sessions but none matched validation');
     }
   }
 

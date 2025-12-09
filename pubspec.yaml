@@ -47,6 +47,9 @@ dependencies:
   dio: ^5.7.0
   http: ^1.2.2
 
+  # Cryptography (for Phantom X25519 encryption)
+  pinenacl: ^0.6.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
