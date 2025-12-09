@@ -146,6 +146,11 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
       await _walletService.handleDeepLink(uri);
     });
 
+    // Register handler for Rabby callbacks
+    deepLinkService.registerHandler('rabby', (uri) async {
+      await _walletService.handleDeepLink(uri);
+    });
+
     // Subscribe to deep link stream for general handling
     _deepLinkSubscription = deepLinkService.deepLinkStream.listen((uri) {
       AppLogger.d('WalletNotifier received deep link: $uri');
@@ -258,7 +263,9 @@ final walletNotifierProvider =
   WalletNotifier.new,
 );
 
-/// Provider for supported wallets
+/// Provider for supported wallets (deep link only - QR removed)
+/// Supported: MetaMask, Trust Wallet, Phantom, Rabby
+/// Removed: WalletConnect (QR only), Coinbase (no deep link), Rainbow (no deep link)
 final supportedWalletsProvider = Provider<List<WalletInfo>>((ref) {
   return [
     WalletInfo(
@@ -270,36 +277,12 @@ final supportedWalletsProvider = Provider<List<WalletInfo>>((ref) {
       supportsSolana: false,
     ),
     WalletInfo(
-      type: WalletType.walletConnect,
-      name: 'WalletConnect',
-      description: 'Connect any WalletConnect-compatible wallet',
-      iconUrl: 'https://raw.githubusercontent.com/WalletConnect/walletconnect-assets/master/Icon/Gradient/Icon.png',
-      supportsEvm: true,
-      supportsSolana: true,
-    ),
-    WalletInfo(
-      type: WalletType.coinbase,
-      name: 'Coinbase Wallet',
-      description: 'Self-custody wallet by Coinbase',
-      iconUrl: 'https://altcoinsbox.com/wp-content/uploads/2022/12/coinbase-logo.webp',
-      supportsEvm: true,
-      supportsSolana: true,
-    ),
-    WalletInfo(
       type: WalletType.trustWallet,
       name: 'Trust Wallet',
       description: 'Multi-chain mobile wallet',
       iconUrl: 'https://trustwallet.com/assets/images/media/assets/TWT.png',
       supportsEvm: true,
       supportsSolana: true,
-    ),
-    WalletInfo(
-      type: WalletType.rainbow,
-      name: 'Rainbow',
-      description: 'Ethereum & Layer 2 wallet',
-      iconUrl: 'https://avatars.githubusercontent.com/u/48327834?s=200&v=4',
-      supportsEvm: true,
-      supportsSolana: false,
     ),
     WalletInfo(
       type: WalletType.phantom,

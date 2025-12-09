@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:wallet_integration_practice/core/core.dart';
 import 'package:wallet_integration_practice/domain/entities/transaction_entity.dart';
 import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
@@ -8,8 +11,6 @@ import 'package:wallet_integration_practice/presentation/providers/chain_provide
 import 'package:wallet_integration_practice/presentation/providers/balance_provider.dart';
 import 'package:wallet_integration_practice/presentation/widgets/wallet/wallet_card.dart';
 import 'package:wallet_integration_practice/presentation/widgets/wallet/wallet_selector.dart';
-import 'package:wallet_integration_practice/presentation/widgets/wallet/select_network_sheet.dart';
-import 'package:wallet_integration_practice/presentation/widgets/wallet/qr_code_display.dart';
 import 'package:wallet_integration_practice/presentation/widgets/wallet/connected_wallets_section.dart';
 import 'package:wallet_integration_practice/presentation/widgets/common/loading_overlay.dart';
 
@@ -78,7 +79,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       return WalletCard(
                         wallet: wallet,
                         onDisconnect: () => _disconnectActiveWallet(activeEntry.id),
-                        onSwitchChain: () => _showChainSelector(context),
+                        // Chain switching removed - wallet auto-connects to default chain
                         balance: balance,
                         tokenSymbol: tokenSymbol,
                         onSignMessage: () => _signMessage(context),
@@ -116,16 +117,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Future<void> _showWalletSelector(BuildContext context) async {
-    // Step 1: Show network selection first
-    final selectedChain = await SelectNetworkSheet.show(context);
-
-    // If user cancelled network selection, abort
-    if (selectedChain == null || !mounted) return;
-
-    // Step 2: Save selected chain to provider
-    ref.read(chainSelectionProvider.notifier).selectChain(selectedChain);
-
-    // Step 3: Show wallet selector
+    // Show wallet selector directly (chain is auto-determined by wallet type)
     await WalletSelector.show(
       context,
       onWalletSelected: (wallet) => _connectWallet(wallet),
@@ -138,28 +130,34 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     });
 
     try {
-      final selectedChain = ref.read(chainSelectionProvider);
+      // Get default chain from wallet type (EVM priority: Ethereum Mainnet)
+      final defaultChainId = wallet.type.defaultChainId;
+      final defaultCluster = wallet.type.defaultCluster;
 
-      // Start connection using MultiWalletNotifier
-      ref.read(multiWalletNotifierProvider.notifier).connectWallet(
+      // Update chainSelectionProvider for balance display consistency
+      final chain = SupportedChains.getByChainId(defaultChainId);
+      if (chain != null) {
+        ref.read(chainSelectionProvider.notifier).selectChain(chain);
+      }
+
+      // Start connection - adapter will auto-launch wallet app via deep link
+      // If wallet is not installed, adapter throws WalletNotInstalledException
+      await ref.read(multiWalletNotifierProvider.notifier).connectWallet(
             walletType: wallet.type,
-            chainId: selectedChain.chainId,
-            cluster: selectedChain.cluster,
+            chainId: defaultChainId,
+            cluster: defaultCluster,
           );
 
-      // Get connection URI for QR display
-      final uri = await ref.read(walletNotifierProvider.notifier).getConnectionUri();
-      if (uri != null && mounted) {
-        setState(() {
-          _isConnecting = false;
-        });
+      // Connection completion is handled by stream listener in provider
 
-        // Show QR code modal
-        await QrCodeModal.show(
-          context,
-          uri: uri,
-          walletName: wallet.name,
-        );
+    } on WalletNotInstalledException catch (e) {
+      // Wallet app is not installed - show install dialog
+      AppLogger.w('Wallet not installed: ${e.walletType}');
+      if (mounted) {
+        final shouldInstall = await _showInstallDialog(wallet);
+        if (shouldInstall && mounted) {
+          await _openAppStore(wallet.type);
+        }
       }
     } catch (e) {
       AppLogger.e('Connection error', e);
@@ -184,34 +182,78 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     }
   }
 
-  Future<void> _disconnectActiveWallet(String walletId) async {
-    await ref.read(multiWalletNotifierProvider.notifier).disconnectWallet(walletId);
+  /// Show dialog asking user to install wallet
+  Future<bool> _showInstallDialog(WalletInfo wallet) async {
+    return await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Text('${wallet.name} Not Installed'),
+            content: Text(
+              '${wallet.name} is not installed on this device.\n'
+              'Would you like to install it from the app store?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Install'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
   }
 
-  void _showChainSelector(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      builder: (context) => _ChainSelectorSheet(
-        onChainSelected: (chain) async {
-          Navigator.pop(context);
-          try {
-            await ref.read(walletNotifierProvider.notifier).switchChain(
-                  chain.chainId!,
-                );
-            ref.read(chainSelectionProvider.notifier).selectChain(chain);
-          } catch (e) {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('Failed to switch chain: ${e.toString()}'),
-                  backgroundColor: Colors.red,
-                ),
-              );
-            }
-          }
-        },
+  /// Open app store for wallet download
+  Future<void> _openAppStore(WalletType type) async {
+    final storeIds = {
+      WalletType.metamask: (
+        WalletConstants.metamaskAppStoreId,
+        WalletConstants.metamaskPackageAndroid
       ),
-    );
+      WalletType.trustWallet: (
+        WalletConstants.trustWalletAppStoreId,
+        WalletConstants.trustWalletPackageAndroid
+      ),
+      WalletType.phantom: (
+        WalletConstants.phantomAppStoreId,
+        WalletConstants.phantomPackageAndroid
+      ),
+      WalletType.rabby: (
+        WalletConstants.rabbyAppStoreId,
+        WalletConstants.rabbyPackageAndroid
+      ),
+    };
+
+    final ids = storeIds[type];
+    if (ids == null) return;
+
+    final (appStoreId, packageName) = ids;
+
+    String storeUrl;
+    if (Platform.isIOS) {
+      storeUrl = 'https://apps.apple.com/app/id$appStoreId';
+    } else if (Platform.isAndroid) {
+      storeUrl = 'https://play.google.com/store/apps/details?id=$packageName';
+    } else {
+      return;
+    }
+
+    try {
+      await launchUrl(
+        Uri.parse(storeUrl),
+        mode: LaunchMode.externalApplication,
+      );
+    } catch (e) {
+      AppLogger.e('Error opening app store', e);
+    }
+  }
+
+  Future<void> _disconnectActiveWallet(String walletId) async {
+    await ref.read(multiWalletNotifierProvider.notifier).disconnectWallet(walletId);
   }
 
   Future<void> _signMessage(BuildContext context) async {
@@ -268,175 +310,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       return 'SOL';
     }
     return 'ETH'; // default fallback
-  }
-}
-
-class _ChainSelector extends StatelessWidget {
-  final ChainInfo selectedChain;
-  final Function(ChainInfo) onChainSelected;
-
-  const _ChainSelector({
-    required this.selectedChain,
-    required this.onChainSelected,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Network',
-              style: theme.textTheme.titleSmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 8),
-            InkWell(
-              onTap: () => _showChainPicker(context),
-              borderRadius: BorderRadius.circular(8),
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 8,
-                ),
-                decoration: BoxDecoration(
-                  border: Border.all(
-                    color: theme.colorScheme.outline.withValues(alpha: 0.5),
-                  ),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 32,
-                      height: 32,
-                      decoration: BoxDecoration(
-                        color: theme.colorScheme.primaryContainer,
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(
-                        Icons.language,
-                        size: 16,
-                        color: theme.colorScheme.primary,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            selectedChain.name,
-                            style: theme.textTheme.bodyMedium?.copyWith(
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          if (selectedChain.isTestnet)
-                            Text(
-                              'Testnet',
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: Colors.orange,
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                    Icon(
-                      Icons.keyboard_arrow_down,
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showChainPicker(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      builder: (context) => _ChainSelectorSheet(
-        onChainSelected: (chain) {
-          Navigator.pop(context);
-          onChainSelected(chain);
-        },
-      ),
-    );
-  }
-}
-
-class _ChainSelectorSheet extends ConsumerWidget {
-  final Function(ChainInfo) onChainSelected;
-
-  const _ChainSelectorSheet({
-    required this.onChainSelected,
-  });
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final chains = ref.watch(allChainsProvider);
-    final theme = Theme.of(context);
-
-    return Container(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Select Network',
-            style: theme.textTheme.headlineSmall,
-          ),
-          const SizedBox(height: 16),
-          Flexible(
-            child: ListView.builder(
-              shrinkWrap: true,
-              itemCount: chains.length,
-              itemBuilder: (context, index) {
-                final chain = chains[index];
-                return ListTile(
-                  leading: CircleAvatar(
-                    backgroundColor: theme.colorScheme.primaryContainer,
-                    child: Text(chain.symbol[0]),
-                  ),
-                  title: Text(chain.name),
-                  subtitle: Text(chain.symbol),
-                  trailing: chain.isTestnet
-                      ? Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.orange.withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: const Text(
-                            'Testnet',
-                            style: TextStyle(
-                              fontSize: 10,
-                              color: Colors.orange,
-                            ),
-                          ),
-                        )
-                      : null,
-                  onTap: () => onChainSelected(chain),
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-    );
   }
 }
 

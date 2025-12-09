@@ -34,6 +34,7 @@ class TrustWalletAdapter extends WalletConnectAdapter {
   }
 
   /// Open Trust Wallet with WalletConnect URI
+  /// Throws [WalletNotInstalledException] if Trust Wallet is not installed
   Future<bool> openWithUri(String wcUri) async {
     try {
       // Encode the WalletConnect URI for Trust Wallet deep link
@@ -47,14 +48,21 @@ class TrustWalletAdapter extends WalletConnectAdapter {
       );
 
       if (!launched) {
-        // Fallback to app store if not installed
-        await _openAppStore();
+        // launchUrl returned false = app not installed
+        throw WalletNotInstalledException(
+          walletType: walletType.name,
+          message: 'Trust Wallet is not installed',
+        );
       }
 
-      return launched;
+      return true;
     } catch (e) {
+      if (e is WalletNotInstalledException) rethrow;
       AppLogger.e('Error opening Trust Wallet with URI', e);
-      return false;
+      throw WalletNotInstalledException(
+        walletType: walletType.name,
+        message: 'Failed to open Trust Wallet: ${e.toString()}',
+      );
     }
   }
 

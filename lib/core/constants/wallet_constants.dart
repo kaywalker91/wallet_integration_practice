@@ -1,3 +1,5 @@
+import 'package:wallet_integration_practice/core/constants/chain_constants.dart';
+
 /// Wallet-specific constants and configurations
 class WalletConstants {
   WalletConstants._();
@@ -127,5 +129,18 @@ extension WalletTypeExtension on WalletType {
       default:
         return false;
     }
+  }
+
+  /// Default chain ID for wallet connection.
+  /// All wallets default to Ethereum Mainnet (EVM priority).
+  int get defaultChainId {
+    return ChainConstants.ethereumMainnet; // 1
+  }
+
+  /// Default Solana cluster for wallet connection.
+  /// Returns null since EVM is prioritized for all wallets.
+  /// Can be overridden in the future for Solana-first wallets.
+  String? get defaultCluster {
+    return null;
   }
 }

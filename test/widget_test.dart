@@ -22,7 +22,7 @@ void main() {
     // Verify that the app title is displayed
     expect(find.text('Wallet Integration Practice'), findsOneWidget);
 
-    // Verify connect wallet card is shown
-    expect(find.text('Connect your wallet'), findsOneWidget);
+    // Verify connect wallet message is shown
+    expect(find.text('Connect a wallet to get started'), findsOneWidget);
   });
 }

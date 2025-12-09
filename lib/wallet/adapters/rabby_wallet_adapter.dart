@@ -41,6 +41,7 @@ class RabbyWalletAdapter extends WalletConnectAdapter {
 
   /// Open Rabby Wallet with WalletConnect URI
   /// Tries multiple deep link formats for compatibility
+  /// Throws [WalletNotInstalledException] if Rabby Wallet is not installed
   Future<bool> openWithUri(String wcUri) async {
     AppLogger.wallet('Attempting to open Rabby with WC URI', data: {
       'uriLength': wcUri.length,
@@ -64,13 +65,9 @@ class RabbyWalletAdapter extends WalletConnectAdapter {
         });
 
         final uri = Uri.parse(deepLink);
-        final canLaunch = await canLaunchUrl(uri);
 
-        if (!canLaunch) {
-          AppLogger.wallet('Cannot launch this URI format, trying next...');
-          continue;
-        }
-
+        // Try to launch directly without checking canLaunchUrl first
+        // (canLaunchUrl is unreliable on Android 11+)
         final launched = await launchUrl(
           uri,
           mode: LaunchMode.externalApplication,
@@ -86,10 +83,12 @@ class RabbyWalletAdapter extends WalletConnectAdapter {
       }
     }
 
-    // All formats failed - try to open app store
-    AppLogger.w('All deep link formats failed, opening app store');
-    await _openAppStore();
-    return false;
+    // All formats failed - wallet is not installed
+    AppLogger.w('All deep link formats failed, Rabby not installed');
+    throw WalletNotInstalledException(
+      walletType: walletType.name,
+      message: 'Rabby Wallet is not installed',
+    );
   }
 
   Future<void> _openAppStore() async {
@@ -216,12 +215,8 @@ class RabbyWalletAdapter extends WalletConnectAdapter {
       }
 
       // Open Rabby Wallet with the URI
-      final launched = await openWithUri(uri);
-
-      if (!launched) {
-        AppLogger.w('Failed to open Rabby Wallet app');
-        // Don't throw - user might scan QR code manually
-      }
+      // Throws WalletNotInstalledException if app is not installed
+      await openWithUri(uri);
 
       // Wait for connection with timeout
       AppLogger.wallet('Waiting for wallet approval...');

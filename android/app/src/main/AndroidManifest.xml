@@ -58,34 +58,40 @@
             <data android:mimeType="text/plain"/>
         </intent>
         <!-- Wallet app package visibility for canLaunchUrl -->
+        <!-- Supported: MetaMask, Trust Wallet, Phantom, Rabby -->
         <package android:name="io.metamask"/>
         <package android:name="app.phantom"/>
         <package android:name="com.wallet.crypto.trustapp"/>
-        <package android:name="org.toshi"/>
-        <package android:name="me.rainbow"/>
-        <!-- Intent queries for wallet deep links -->
+        <package android:name="com.debank.rabbymobile"/>
+        <!-- Intent queries for wallet deep links (with proper categories for Android 11+) -->
         <intent>
             <action android:name="android.intent.action.VIEW"/>
+            <category android:name="android.intent.category.DEFAULT"/>
+            <category android:name="android.intent.category.BROWSABLE"/>
             <data android:scheme="metamask"/>
         </intent>
         <intent>
             <action android:name="android.intent.action.VIEW"/>
+            <category android:name="android.intent.category.DEFAULT"/>
+            <category android:name="android.intent.category.BROWSABLE"/>
             <data android:scheme="phantom"/>
         </intent>
         <intent>
             <action android:name="android.intent.action.VIEW"/>
+            <category android:name="android.intent.category.DEFAULT"/>
+            <category android:name="android.intent.category.BROWSABLE"/>
             <data android:scheme="trust"/>
         </intent>
         <intent>
             <action android:name="android.intent.action.VIEW"/>
-            <data android:scheme="cbwallet"/>
+            <category android:name="android.intent.category.DEFAULT"/>
+            <category android:name="android.intent.category.BROWSABLE"/>
+            <data android:scheme="rabby"/>
         </intent>
         <intent>
             <action android:name="android.intent.action.VIEW"/>
-            <data android:scheme="rainbow"/>
-        </intent>
-        <intent>
-            <action android:name="android.intent.action.VIEW"/>
+            <category android:name="android.intent.category.DEFAULT"/>
+            <category android:name="android.intent.category.BROWSABLE"/>
             <data android:scheme="wc"/>
         </intent>
     </queries>

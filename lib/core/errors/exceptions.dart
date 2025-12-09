@@ -23,6 +23,19 @@ class WalletException extends AppException {
   });
 }
 
+/// Exception thrown when wallet app is not installed on device
+class WalletNotInstalledException extends WalletException {
+  final String walletType;
+
+  const WalletNotInstalledException({
+    required this.walletType,
+    required super.message,
+  }) : super(code: 'WALLET_NOT_INSTALLED');
+
+  @override
+  String toString() => 'WalletNotInstalledException: $walletType - $message';
+}
+
 /// Network-related exceptions
 class NetworkException extends AppException {
   const NetworkException({

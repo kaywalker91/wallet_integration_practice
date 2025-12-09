@@ -60,13 +60,12 @@
 		</dict>
 	</array>
 	<!-- Wallet app schemes for canLaunchUrl -->
+	<!-- Supported: MetaMask, Trust Wallet, Phantom, Rabby -->
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>metamask</string>
 		<string>phantom</string>
 		<string>trust</string>
-		<string>cbwallet</string>
-		<string>rainbow</string>
 		<string>rabby</string>
 		<string>wc</string>
 	</array>

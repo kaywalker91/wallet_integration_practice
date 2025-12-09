@@ -5,7 +5,7 @@ import 'package:wallet_integration_practice/core/constants/chain_constants.dart'
 
 /// Provider for selected chain (Riverpod 3.0 compatible)
 final selectedChainProvider = StateProvider<ChainInfo>((ref) {
-  return SupportedChains.ethereumSepolia; // Default to testnet
+  return SupportedChains.ethereumMainnet; // Default to mainnet
 });
 
 /// Provider for available EVM chains
@@ -42,7 +42,7 @@ final chainByIdProvider = Provider.family<ChainInfo?, int>((ref, chainId) {
 class ChainSelectionNotifier extends Notifier<ChainInfo> {
   @override
   ChainInfo build() {
-    return SupportedChains.ethereumSepolia;
+    return SupportedChains.ethereumMainnet; // Default to mainnet
   }
 
   void selectChain(ChainInfo chain) {

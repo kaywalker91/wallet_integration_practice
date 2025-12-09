@@ -75,29 +75,21 @@ class PhantomAdapter extends SolanaWalletAdapter {
     _currentCluster = cluster ?? ChainConstants.solanaMainnet;
 
     try {
-      // Check if Phantom is installed
-      final installed = await isPhantomInstalled();
-      if (!installed) {
-        await _openAppStore();
-        throw WalletException(
-          message: 'Phantom wallet is not installed',
-          code: 'NOT_INSTALLED',
-        );
-      }
-
       // Build Phantom connect deep link
       final connectUrl = _buildConnectUrl();
 
-      // Launch Phantom
+      // Try to launch Phantom directly
+      // (canLaunchUrl is unreliable on Android 11+)
       final launched = await launchUrl(
         Uri.parse(connectUrl),
         mode: LaunchMode.externalApplication,
       );
 
       if (!launched) {
-        throw const WalletException(
-          message: 'Failed to open Phantom',
-          code: 'LAUNCH_FAILED',
+        // launchUrl returned false = app not installed
+        throw WalletNotInstalledException(
+          walletType: walletType.name,
+          message: 'Phantom wallet is not installed',
         );
       }
 
