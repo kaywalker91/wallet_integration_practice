@@ -502,6 +502,8 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
         return Icons.color_lens;
       case WalletType.walletConnect:
         return Icons.link;
+      case WalletType.okxWallet:
+        return Icons.grid_view; // OKX logo is a grid pattern
     }
   }
 
@@ -521,6 +523,8 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
         return const Color(0xFF001F4D); // Rainbow dark blue
       case WalletType.walletConnect:
         return const Color(0xFF3B99FC); // WalletConnect blue
+      case WalletType.okxWallet:
+        return const Color(0xFF000000); // OKX black
     }
   }
 }

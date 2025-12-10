@@ -34,6 +34,14 @@ class WalletConstants {
   static const String rabbyDeepLink = 'rabby://';
   static const String rabbyPackageAndroid = 'com.debank.rabbymobile';
   static const String rabbyAppStoreId = '6474381673';
+
+  // OKX Wallet (standalone wallet app - "OKX Wallet: Portal to Web3")
+  // Note: This is different from the exchange app "OKX: Buy Bitcoin BTC & Crypto"
+  // Deep link scheme is 'okxwallet://' (not 'okx://') per WalletConnect Explorer
+  static const String okxWalletDeepLink = 'okxwallet://';
+  static const String okxWalletUniversalLink = 'https://web3.okx.com/download';
+  static const String okxWalletPackageAndroid = 'com.okx.wallet';
+  static const String okxWalletAppStoreId = '6743309484';
 }
 
 /// Supported wallet types
@@ -45,6 +53,7 @@ enum WalletType {
   rainbow,
   phantom,
   rabby,
+  okxWallet,
 }
 
 /// Extension for WalletType
@@ -65,6 +74,8 @@ extension WalletTypeExtension on WalletType {
         return 'Phantom';
       case WalletType.rabby:
         return 'Rabby';
+      case WalletType.okxWallet:
+        return 'OKX Wallet';
     }
   }
 
@@ -84,6 +95,8 @@ extension WalletTypeExtension on WalletType {
         return 'assets/icons/phantom.png';
       case WalletType.rabby:
         return 'assets/icons/rabby.png';
+      case WalletType.okxWallet:
+        return 'assets/icons/okx.png';
     }
   }
 
@@ -101,6 +114,8 @@ extension WalletTypeExtension on WalletType {
         return WalletConstants.phantomDeepLink;
       case WalletType.rabby:
         return WalletConstants.rabbyDeepLink;
+      case WalletType.okxWallet:
+        return WalletConstants.okxWalletDeepLink;
       case WalletType.walletConnect:
         return '';
     }
@@ -114,6 +129,7 @@ extension WalletTypeExtension on WalletType {
       case WalletType.trustWallet:
       case WalletType.rainbow:
       case WalletType.rabby:
+      case WalletType.okxWallet:
         return true;
       case WalletType.phantom:
         return true; // Phantom also supports Ethereum now
@@ -125,6 +141,7 @@ extension WalletTypeExtension on WalletType {
       case WalletType.phantom:
       case WalletType.coinbase:
       case WalletType.trustWallet:
+      case WalletType.okxWallet:
         return true;
       default:
         return false;

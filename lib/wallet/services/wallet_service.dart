@@ -10,6 +10,7 @@ import 'package:wallet_integration_practice/wallet/adapters/metamask_adapter.dar
 import 'package:wallet_integration_practice/wallet/adapters/phantom_adapter.dart';
 import 'package:wallet_integration_practice/wallet/adapters/trust_wallet_adapter.dart';
 import 'package:wallet_integration_practice/wallet/adapters/rabby_wallet_adapter.dart';
+import 'package:wallet_integration_practice/wallet/adapters/okx_wallet_adapter.dart';
 import 'package:wallet_integration_practice/wallet/models/wallet_adapter_config.dart';
 
 /// Wallet service that manages different wallet adapters.
@@ -122,8 +123,14 @@ class WalletService {
       await handleDeepLink(uri);
     });
 
+    // OKX Wallet callback handler
+    deepLinkService.registerHandler('okx', (uri) async {
+      AppLogger.wallet('📱 OKX Wallet deep link handler invoked', data: {'uri': uri.toString()});
+      await handleDeepLink(uri);
+    });
+
     AppLogger.wallet('✅ Deep link handlers registered', data: {
-      'handlers': ['phantom', 'metamask', 'wc', 'trust', 'rabby'],
+      'handlers': ['phantom', 'metamask', 'wc', 'trust', 'rabby', 'okx'],
     });
   }
 
@@ -152,9 +159,11 @@ class WalletService {
         return TrustWalletAdapter(config: _config);
       case WalletType.rabby:
         return RabbyWalletAdapter(config: _config);
+      case WalletType.okxWallet:
+        return OkxWalletAdapter(config: _config);
       case WalletType.coinbase:
       case WalletType.rainbow:
-        // These wallets use WalletConnect
+        // These wallets use WalletConnect with AppKit modal
         return WalletConnectAdapter(config: _config);
     }
   }

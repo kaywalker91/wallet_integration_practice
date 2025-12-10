@@ -279,6 +279,14 @@ final supportedWalletsProvider = Provider<List<WalletInfo>>((ref) {
       supportsEvm: true,
       supportsSolana: false,
     ),
+    WalletInfo(
+      type: WalletType.okxWallet,
+      name: 'OKX Wallet',
+      description: 'Multi-chain crypto wallet',
+      iconUrl: 'https://static.okx.com/cdn/assets/imgs/221/C5E8A21B2D854E5B.png',
+      supportsEvm: true,
+      supportsSolana: true,
+    ),
   ];
 });
 
