@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/widgets.dart';
 import 'package:reown_appkit/reown_appkit.dart';
 import 'package:wallet_integration_practice/core/core.dart';
 import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
@@ -12,7 +13,10 @@ import 'package:wallet_integration_practice/wallet/models/wallet_adapter_config.
 /// Supports multiple accounts from a single wallet session.
 /// The wallet (e.g., MetaMask) decides which accounts to share,
 /// and this adapter manages which account is "active" for transactions.
-class WalletConnectAdapter extends EvmWalletAdapter {
+///
+/// Implements [WidgetsBindingObserver] to detect app lifecycle changes
+/// and proactively check for session updates when app resumes from background.
+class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver {
   final WalletAdapterConfig _config;
 
   ReownAppKit? _appKit;
@@ -36,6 +40,13 @@ class WalletConnectAdapter extends EvmWalletAdapter {
 
   /// Stream controller for account changes
   final _accountsChangedController = StreamController<SessionAccounts>.broadcast();
+
+  /// Whether the adapter is currently waiting for wallet approval
+  /// Used by lifecycle observer to know when to check for session on resume
+  bool _isWaitingForApproval = false;
+
+  /// Getter for subclasses to access approval waiting state
+  bool get isWaitingForApproval => _isWaitingForApproval;
 
   WalletConnectAdapter({WalletAdapterConfig? config})
       : _config = config ?? WalletAdapterConfig.defaultConfig();
@@ -128,7 +139,73 @@ class WalletConnectAdapter extends EvmWalletAdapter {
     // Restore existing sessions
     await _restoreSession();
 
+    // Register lifecycle observer to detect app resume
+    WidgetsBinding.instance.addObserver(this);
+
     AppLogger.wallet('WalletConnect adapter initialized');
+  }
+
+  /// Called when app lifecycle state changes (foreground/background)
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    AppLogger.wallet('App lifecycle state changed', data: {
+      'state': state.name,
+      'isWaitingForApproval': _isWaitingForApproval,
+      'hasSession': _session != null,
+    });
+
+    if (state == AppLifecycleState.resumed && _isWaitingForApproval) {
+      // App returned to foreground while waiting for wallet approval
+      // Proactively check if session was established
+      _checkConnectionOnResume();
+    }
+  }
+
+  /// Check for session updates when app resumes from background
+  ///
+  /// This is called when:
+  /// 1. User approved connection in wallet app and returned to our app
+  /// 2. App was brought back to foreground during connection wait
+  ///
+  /// The WalletConnect relay may have already received the session,
+  /// but the future.timeout is still waiting. This actively checks
+  /// for available sessions to complete the connection faster.
+  Future<void> _checkConnectionOnResume() async {
+    AppLogger.wallet('Checking connection after app resume');
+
+    // 1. Session already established - nothing to do
+    if (_session != null) {
+      AppLogger.wallet('Session already established, skipping check');
+      return;
+    }
+
+    // 2. AppKit not initialized - can't check
+    if (_appKit == null) {
+      AppLogger.wallet('AppKit not initialized, skipping check');
+      return;
+    }
+
+    // 3. Check if AppKit has received a session while we were in background
+    final sessions = _appKit!.sessions.getAll();
+    for (final session in sessions) {
+      if (isSessionValid(session)) {
+        AppLogger.wallet('Found valid session after resume', data: {
+          'topic': session.topic,
+          'peerName': session.peer?.metadata.name,
+        });
+
+        // Update session and emit status
+        // Note: The session.future in connect() may still be waiting,
+        // but _onSessionConnect event will also trigger when it resolves
+        _session = session;
+        _parseSessionAccounts();
+        _emitConnectionStatus();
+        return;
+      }
+    }
+
+    // 4. No session found yet - continue waiting for timeout
+    AppLogger.wallet('No session found after resume, continuing to wait');
   }
 
   /// Check if a session matches the expected wallet type.
@@ -333,6 +410,9 @@ class WalletConnectAdapter extends EvmWalletAdapter {
     final maxRetries = AppConstants.maxConnectionRetries;
     int retryCount = 0;
 
+    // Mark that we're waiting for approval - enables lifecycle resume check
+    _isWaitingForApproval = true;
+
     _connectionController.add(WalletConnectionStatus.connecting(
       message: 'Initializing connection...',
       retryCount: 0,
@@ -415,6 +495,9 @@ class WalletConnectAdapter extends EvmWalletAdapter {
 
         _connectionController.add(WalletConnectionStatus.connected(wallet));
 
+        // Connection successful - clear waiting flag
+        _isWaitingForApproval = false;
+
         AppLogger.wallet('Wallet connected', data: {
           'address': wallet.address,
           'chainId': wallet.chainId,
@@ -451,19 +534,23 @@ class WalletConnectAdapter extends EvmWalletAdapter {
           continue;
         }
 
-        // Final failure
+        // Final failure - clear waiting flag
+        _isWaitingForApproval = false;
         AppLogger.e('Connection failed after $retryCount attempt(s)', e);
         _connectionController.add(WalletConnectionStatus.error(e.message));
         rethrow;
 
       } catch (e) {
+        // Unexpected error - clear waiting flag
+        _isWaitingForApproval = false;
         AppLogger.e('Unexpected connection error', e);
         _connectionController.add(WalletConnectionStatus.error(e.toString()));
         rethrow;
       }
     }
 
-    // Max retries exceeded
+    // Max retries exceeded - clear waiting flag
+    _isWaitingForApproval = false;
     const exception = WalletException(
       message: 'Max connection retries exceeded',
       code: 'MAX_RETRIES',
@@ -669,6 +756,9 @@ class WalletConnectAdapter extends EvmWalletAdapter {
 
   @override
   Future<void> dispose() async {
+    // Remove lifecycle observer
+    WidgetsBinding.instance.removeObserver(this);
+
     _appKit?.onSessionConnect.unsubscribe(_onSessionConnect);
     _appKit?.onSessionDelete.unsubscribe(_onSessionDelete);
     _appKit?.onSessionEvent.unsubscribe(_onSessionEvent);

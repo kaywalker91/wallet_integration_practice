@@ -58,12 +58,13 @@
             <data android:mimeType="text/plain"/>
         </intent>
         <!-- Wallet app package visibility for canLaunchUrl -->
-        <!-- Supported: MetaMask, Trust Wallet, Phantom, Rabby, OKX Wallet -->
+        <!-- Supported: MetaMask, Trust Wallet, Phantom, Rabby, OKX Wallet, OKX Exchange -->
         <package android:name="io.metamask"/>
         <package android:name="app.phantom"/>
         <package android:name="com.wallet.crypto.trustapp"/>
         <package android:name="com.debank.rabbymobile"/>
         <package android:name="com.okx.wallet"/>
+        <package android:name="com.okinc.okex"/>
         <!-- Intent queries for wallet deep links (with proper categories for Android 11+) -->
         <intent>
             <action android:name="android.intent.action.VIEW"/>

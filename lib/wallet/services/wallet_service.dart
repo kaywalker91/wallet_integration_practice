@@ -39,6 +39,36 @@ class WalletService {
   Stream<WalletConnectionStatus> get connectionStream =>
       _connectionController.stream;
 
+  /// Get current connection status synchronously.
+  ///
+  /// Returns the current connection state based on adapter and wallet state.
+  /// This is useful for checking status immediately without waiting for stream events.
+  WalletConnectionStatus get currentConnectionStatus {
+    if (_connectedWallet != null) {
+      return WalletConnectionStatus.connected(_connectedWallet!);
+    }
+
+    // Check if adapter has an active session (for restoring scenarios)
+    if (_activeAdapter != null && _activeAdapter!.isConnected) {
+      final address = _activeAdapter!.connectedAddress;
+      if (address != null) {
+        // Reconstruct wallet entity from adapter state
+        final wallet = WalletEntity(
+          address: address,
+          type: _activeAdapter!.walletType,
+          chainId: _activeAdapter is EvmWalletAdapter
+              ? (_activeAdapter as EvmWalletAdapter).currentChainId
+              : null,
+          connectedAt: DateTime.now(),
+        );
+        _connectedWallet = wallet;
+        return WalletConnectionStatus.connected(wallet);
+      }
+    }
+
+    return WalletConnectionStatus.disconnected();
+  }
+
   /// Stream of session account changes
   Stream<SessionAccounts> get accountsChangedStream =>
       _accountsChangedController.stream;

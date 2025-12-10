@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wallet_integration_practice/core/core.dart';
+import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
 import 'package:wallet_integration_practice/presentation/providers/wallet_provider.dart';
 import 'package:wallet_integration_practice/presentation/providers/chain_provider.dart';
 import 'package:wallet_integration_practice/presentation/screens/home/home_screen.dart';
@@ -56,14 +57,16 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
 
     // Defer provider operations until after the widget tree is built
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _listenToConnectionStatus();
-
       if (widget.isRestoring) {
-        // Restoring from pending state - just wait for session, don't re-initiate
-        AppLogger.i('[Onboarding] Restoring from pending state, waiting for session...');
+        // Restoring from pending state - initialize adapter and check for existing session
+        AppLogger.i('[Onboarding] Restoring from pending state...');
         setState(() => _currentStep = OnboardingStep.waitingApproval);
+        _restoreAndCheckSession();
       } else {
-        // Normal flow - add delay to ensure UI is fully rendered before wallet app opens
+        // Normal flow - listen first, then initiate connection
+        _listenToConnectionStatus();
+
+        // Add delay to ensure UI is fully rendered before wallet app opens
         Future.delayed(const Duration(milliseconds: 300), () {
           if (mounted) {
             _initiateConnection();
@@ -82,23 +85,30 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
 
   void _listenToConnectionStatus() {
     final walletService = ref.read(walletServiceProvider);
+
+    // IMPORTANT: Check current connection status FIRST before subscribing to stream.
+    // This handles the case where:
+    // 1. User approved connection in wallet app
+    // 2. WalletConnect received session while app was in background
+    // 3. App returned to foreground, but stream event was already emitted
+    //
+    // Without this check, the UI would wait forever for a stream event that won't come.
+    final currentStatus = walletService.currentConnectionStatus;
+    AppLogger.d('[Onboarding] Checking current status: ${currentStatus.state}');
+
+    if (currentStatus.isConnected && currentStatus.wallet != null) {
+      AppLogger.i('[Onboarding] Already connected! Proceeding to completion.');
+      _handleConnectionSuccess(currentStatus.wallet!);
+      return; // Don't subscribe to stream - already connected
+    }
+
+    // Subscribe to stream for future status updates
     _connectionSubscription = walletService.connectionStream.listen(
       (status) {
         AppLogger.d('[Onboarding] Connection status: ${status.state}');
 
         if (status.isConnected && status.wallet != null) {
-          // Connection successful - clear pending state
-          ref.read(pendingConnectionServiceProvider).clearPendingConnection();
-
-          setState(() => _currentStep = OnboardingStep.verifying);
-
-          // Brief delay to show verifying step, then complete
-          Future.delayed(const Duration(milliseconds: 600), () {
-            if (mounted) {
-              setState(() => _currentStep = OnboardingStep.complete);
-              _navigateToHome();
-            }
-          });
+          _handleConnectionSuccess(status.wallet!);
         } else if (status.hasError) {
           // Connection failed - clear pending state
           ref.read(pendingConnectionServiceProvider).clearPendingConnection();
@@ -117,6 +127,80 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
         });
       },
     );
+  }
+
+  /// Handle successful wallet connection
+  void _handleConnectionSuccess(WalletEntity wallet) {
+    // Clear pending state
+    ref.read(pendingConnectionServiceProvider).clearPendingConnection();
+
+    AppLogger.wallet('[Onboarding] Connection successful', data: {
+      'address': wallet.address,
+      'type': wallet.type.name,
+    });
+
+    setState(() => _currentStep = OnboardingStep.verifying);
+
+    // Brief delay to show verifying step, then complete
+    Future.delayed(const Duration(milliseconds: 600), () {
+      if (mounted) {
+        setState(() => _currentStep = OnboardingStep.complete);
+        _navigateToHome();
+      }
+    });
+  }
+
+  /// Restore session after cold start.
+  ///
+  /// This is called when the app was killed while waiting for wallet approval,
+  /// and the user returns from the wallet app. We need to:
+  /// 1. Re-initialize the wallet adapter
+  /// 2. Check if a session was already established
+  /// 3. If connected, proceed to home; otherwise, wait for session events
+  Future<void> _restoreAndCheckSession() async {
+    AppLogger.i('[Onboarding] Restoring session for ${widget.walletType.name}...');
+
+    try {
+      // First, listen to connection status stream for future events
+      _listenToConnectionStatus();
+
+      // If _listenToConnectionStatus already detected a connection, we're done
+      if (_currentStep == OnboardingStep.verifying ||
+          _currentStep == OnboardingStep.complete) {
+        AppLogger.i('[Onboarding] Session already found during listen setup');
+        return;
+      }
+
+      // Re-connect to the wallet adapter to restore session
+      // This will check for existing WalletConnect sessions
+
+      // Get default chain from wallet type
+      final defaultChainId = widget.walletType.defaultChainId;
+      final defaultCluster = widget.walletType.defaultCluster;
+
+      // Update chain selection for balance display
+      final chain = SupportedChains.getByChainId(defaultChainId);
+      if (chain != null) {
+        ref.read(chainSelectionProvider.notifier).selectChain(chain);
+      }
+
+      // Try to restore/connect - this will check for existing sessions
+      await ref.read(multiWalletNotifierProvider.notifier).connectWallet(
+            walletType: widget.walletType,
+            chainId: defaultChainId,
+            cluster: defaultCluster,
+          );
+
+      AppLogger.i('[Onboarding] Session restore initiated');
+    } catch (e) {
+      AppLogger.e('[Onboarding] Session restore error', e);
+      if (mounted) {
+        setState(() {
+          _currentStep = OnboardingStep.error;
+          _errorMessage = 'Failed to restore session: ${e.toString()}';
+        });
+      }
+    }
   }
 
   Future<void> _initiateConnection() async {

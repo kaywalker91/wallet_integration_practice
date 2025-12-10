@@ -90,6 +90,19 @@ class DeepLinkService {
     AppLogger.i('🔔 Routing wallet callback: scheme=$scheme, host=$host, path=$path');
     AppLogger.i('📋 Registered handlers: ${_handlers.keys.toList()}');
 
+    // Handle empty deep link callback (wip:// with no host/path)
+    // This happens when wallet app returns to our app without specific callback data
+    if (scheme == 'wip' && host.isEmpty && path.isEmpty) {
+      AppLogger.i('📱 App resumed from wallet (empty callback)');
+      if (_handlers.containsKey('app_resumed')) {
+        await _handlers['app_resumed']!(uri);
+        return;
+      }
+      // No handler registered is OK - app lifecycle observer will handle this
+      AppLogger.d('No app_resumed handler registered (handled by lifecycle observer)');
+      return;
+    }
+
     // Phantom callback: wip://phantom/callback?...
     if (host == 'phantom' || path.contains('phantom')) {
       if (_handlers.containsKey('phantom')) {

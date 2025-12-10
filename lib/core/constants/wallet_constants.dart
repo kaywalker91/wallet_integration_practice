@@ -42,6 +42,13 @@ class WalletConstants {
   static const String okxWalletUniversalLink = 'https://web3.okx.com/download';
   static const String okxWalletPackageAndroid = 'com.okx.wallet';
   static const String okxWalletAppStoreId = '6743309484';
+
+  // OKX Exchange App (can also handle Web3 wallet functions)
+  // Some deep link handlers may respond to 'okx://' scheme
+  // DApp browser format: okx://wallet/dapp/url?dappUrl={encodedUrl}
+  static const String okxExchangeDeepLink = 'okx://';
+  static const String okxExchangePackageAndroid = 'com.okinc.okex';
+  static const String okxExchangeAppStoreId = '1327268470';
 }
 
 /// Supported wallet types
