@@ -1,3 +1,5 @@
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+
 /// Application-wide constants
 class AppConstants {
   AppConstants._();
@@ -7,7 +9,7 @@ class AppConstants {
   static const String appVersion = '1.0.0';
 
   // WalletConnect
-  static const String walletConnectProjectId = 'f0c9ca107f696672987b909564cc9347';
+  static String get walletConnectProjectId => dotenv.env['WALLETCONNECT_PROJECT_ID'] ?? '';
   static const String walletConnectRelayUrl = 'wss://relay.walletconnect.com';
 
   // App Metadata for WalletConnect

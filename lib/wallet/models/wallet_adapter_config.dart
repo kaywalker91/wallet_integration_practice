@@ -24,7 +24,7 @@ class WalletAdapterConfig {
 
   /// Default configuration for WalletConnect
   factory WalletAdapterConfig.defaultConfig() {
-    return const WalletAdapterConfig(
+    return WalletAdapterConfig(
       projectId: AppConstants.walletConnectProjectId,
       appName: AppConstants.appName,
       appDescription: AppConstants.appDescription,
