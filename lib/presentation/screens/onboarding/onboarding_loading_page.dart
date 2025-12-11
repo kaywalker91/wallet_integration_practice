@@ -454,18 +454,40 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
     final isError = _currentStep == OnboardingStep.error;
     final isComplete = _currentStep == OnboardingStep.complete;
 
-    Color iconColor;
-    IconData iconData;
+    Color borderColor;
+    Color backgroundColor;
+    Widget iconWidget;
 
     if (isError) {
-      iconColor = theme.colorScheme.error;
-      iconData = Icons.error_outline;
+      borderColor = theme.colorScheme.error;
+      backgroundColor = theme.colorScheme.error.withValues(alpha: 0.1);
+      iconWidget = Icon(
+        Icons.error_outline,
+        size: 48,
+        color: theme.colorScheme.error,
+      );
     } else if (isComplete) {
-      iconColor = Colors.green;
-      iconData = Icons.check_circle;
+      borderColor = Colors.green;
+      backgroundColor = Colors.green.withValues(alpha: 0.1);
+      iconWidget = const Icon(
+        Icons.check_circle,
+        size: 48,
+        color: Colors.green,
+      );
     } else {
-      iconColor = _getWalletColor(widget.walletType);
-      iconData = _getWalletIcon(widget.walletType);
+      borderColor = _getWalletColor(widget.walletType).withValues(alpha: 0.3);
+      backgroundColor = _getWalletColor(widget.walletType).withValues(alpha: 0.1);
+      iconWidget = Image.asset(
+        widget.walletType.iconAsset,
+        width: 48,
+        height: 48,
+        fit: BoxFit.contain,
+        errorBuilder: (context, error, stackTrace) => Icon(
+          Icons.account_balance_wallet,
+          size: 48,
+          color: _getWalletColor(widget.walletType),
+        ),
+      );
     }
 
     return AnimatedBuilder(
@@ -479,18 +501,15 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
             width: 100,
             height: 100,
             decoration: BoxDecoration(
-              color: iconColor.withValues(alpha: 0.15),
+              color: backgroundColor,
               borderRadius: BorderRadius.circular(24),
               border: Border.all(
-                color: iconColor.withValues(alpha: 0.3),
+                color: borderColor,
                 width: 2,
               ),
             ),
-            child: Icon(
-              iconData,
-              size: 48,
-              color: iconColor,
-            ),
+            padding: const EdgeInsets.all(20), // Add padding for the image
+            child: Center(child: iconWidget),
           ),
         );
       },
@@ -591,26 +610,7 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
     );
   }
 
-  IconData _getWalletIcon(WalletType type) {
-    switch (type) {
-      case WalletType.metamask:
-        return Icons.account_balance_wallet;
-      case WalletType.phantom:
-        return Icons.auto_awesome;
-      case WalletType.trustWallet:
-        return Icons.shield;
-      case WalletType.rabby:
-        return Icons.pets;
-      case WalletType.coinbase:
-        return Icons.currency_bitcoin;
-      case WalletType.rainbow:
-        return Icons.color_lens;
-      case WalletType.walletConnect:
-        return Icons.link;
-      case WalletType.okxWallet:
-        return Icons.grid_view; // OKX logo is a grid pattern
-    }
-  }
+
 
   Color _getWalletColor(WalletType type) {
     switch (type) {
