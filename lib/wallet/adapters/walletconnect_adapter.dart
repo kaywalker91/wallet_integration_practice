@@ -171,11 +171,20 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
   /// but the future.timeout is still waiting. This actively checks
   /// for available sessions to complete the connection faster.
   Future<void> _checkConnectionOnResume() async {
+    await checkConnectionOnResume();
+  }
+
+  /// Protected method for subclasses to check connection on resume
+  /// This allows subclasses to call this directly without going through
+  /// lifecycle methods, avoiding duplicate triggers.
+  @protected
+  Future<void> checkConnectionOnResume() async {
     AppLogger.wallet('Checking connection after app resume');
 
-    // 1. Session already established - nothing to do
+    // 1. Session already established - clear flag and return
     if (_session != null) {
-      AppLogger.wallet('Session already established, skipping check');
+      AppLogger.wallet('Session already established, clearing approval flag');
+      _isWaitingForApproval = false;
       return;
     }
 
@@ -200,11 +209,14 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
         _session = session;
         _parseSessionAccounts();
         _emitConnectionStatus();
+        // Clear flag AFTER emitting status to ensure connection completes
+        _isWaitingForApproval = false;
         return;
       }
     }
 
     // 4. No session found yet - continue waiting for timeout
+    // Do NOT clear _isWaitingForApproval here - we need to keep checking
     AppLogger.wallet('No session found after resume, continuing to wait');
   }
 

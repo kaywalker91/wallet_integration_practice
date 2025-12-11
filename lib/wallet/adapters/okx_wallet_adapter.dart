@@ -1,7 +1,6 @@
 import 'dart:async' show Completer, StreamSubscription, unawaited;
 import 'dart:io';
 import 'dart:math' show min;
-import 'package:flutter/widgets.dart' show AppLifecycleState;
 import 'package:reown_appkit/reown_appkit.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wallet_integration_practice/core/core.dart';
@@ -36,6 +35,10 @@ class OkxWalletAdapter extends WalletConnectAdapter {
 
   /// Flag to track if deep link handlers have been registered
   bool _handlersRegistered = false;
+
+  /// Flag to prevent duplicate callback processing
+  /// This prevents the infinite loop when multiple callbacks arrive
+  bool _isProcessingCallback = false;
 
   @override
   WalletType get walletType => WalletType.okxWallet;
@@ -74,43 +77,74 @@ class OkxWalletAdapter extends WalletConnectAdapter {
   }
 
   /// Handle OKX-specific callback
+  ///
+  /// This is called when OKX Wallet sends a deep link callback after
+  /// user approves the connection. We check for session establishment
+  /// and clear the approval flag to prevent infinite loops.
   Future<void> _handleOkxCallback(Uri uri) async {
-    AppLogger.wallet('OKX callback received', data: {
-      'uri': uri.toString(),
-      'isWaitingForApproval': isWaitingForApproval,
-    });
+    // Guard: Skip if already connected (prevents infinite loop)
+    if (isConnected) {
+      AppLogger.wallet('OKX callback ignored: already connected');
+      return;
+    }
 
-    // If we're waiting for approval, proactively check for session
-    if (isWaitingForApproval) {
+    // Guard: Skip if already processing a callback (prevent duplicate processing)
+    if (_isProcessingCallback) {
+      AppLogger.wallet('OKX callback ignored: already processing');
+      return;
+    }
+
+    _isProcessingCallback = true;
+
+    try {
+      AppLogger.wallet('OKX callback received', data: {
+        'uri': uri.toString(),
+        'isWaitingForApproval': isWaitingForApproval,
+      });
+
       // Small delay to allow relay server to propagate session
       await Future.delayed(const Duration(milliseconds: 200));
-      _triggerSessionCheck();
+
+      // Directly call the protected method instead of lifecycle callback
+      // This prevents duplicate triggers from lifecycle events
+      await checkConnectionOnResume();
+    } finally {
+      _isProcessingCallback = false;
     }
   }
 
   /// Handle generic app resume callback
+  ///
+  /// This is called when the app returns from background without
+  /// specific callback data from OKX Wallet.
   Future<void> _handleAppResumed(Uri uri) async {
-    AppLogger.wallet('App resumed callback (OKX adapter)', data: {
-      'isWaitingForApproval': isWaitingForApproval,
-    });
+    // Guard: Skip if already connected (prevents infinite loop)
+    if (isConnected) {
+      AppLogger.wallet('App resumed callback ignored: already connected');
+      return;
+    }
 
-    // If we're waiting for approval, check for session
-    if (isWaitingForApproval) {
+    // Guard: Skip if already processing a callback
+    if (_isProcessingCallback) {
+      AppLogger.wallet('App resumed callback ignored: already processing');
+      return;
+    }
+
+    _isProcessingCallback = true;
+
+    try {
+      AppLogger.wallet('App resumed callback (OKX adapter)', data: {
+        'isWaitingForApproval': isWaitingForApproval,
+      });
+
       // Slightly longer delay for generic resume to allow relay to sync
       await Future.delayed(const Duration(milliseconds: 300));
-      _triggerSessionCheck();
-    }
-  }
 
-  /// Trigger session check via lifecycle mechanism
-  ///
-  /// This calls the parent class's _checkConnectionOnResume() indirectly
-  /// by simulating the same check that happens on AppLifecycleState.resumed
-  void _triggerSessionCheck() {
-    // The parent class checks sessions in didChangeAppLifecycleState
-    // We can trigger the same behavior by calling the lifecycle callback
-    // with resumed state
-    didChangeAppLifecycleState(AppLifecycleState.resumed);
+      // Directly call the protected method instead of lifecycle callback
+      await checkConnectionOnResume();
+    } finally {
+      _isProcessingCallback = false;
+    }
   }
 
   @override
