@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:wallet_integration_practice/core/utils/address_utils.dart';
+import 'package:wallet_integration_practice/core/constants/wallet_constants.dart';
 import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
 
 /// Hero-style card displaying connected wallet information with integrated actions
@@ -143,10 +144,15 @@ class WalletCard extends StatelessWidget {
             color: Colors.white.withValues(alpha: 0.2),
             borderRadius: BorderRadius.circular(12),
           ),
-          child: const Icon(
-            Icons.account_balance_wallet,
-            color: Colors.white,
-            size: 24,
+          padding: const EdgeInsets.all(8.0),
+          child: Image.asset(
+            wallet.type.iconAsset,
+            fit: BoxFit.contain,
+            errorBuilder: (context, error, stackTrace) => const Icon(
+              Icons.account_balance_wallet,
+              color: Colors.white,
+              size: 24,
+            ),
           ),
         ),
         const SizedBox(width: 12),
@@ -213,42 +219,28 @@ class WalletCard extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 4),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Text(
-              balance != null ? _formatBalance(balance!) : '---',
-              style: theme.textTheme.displaySmall?.copyWith(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-                letterSpacing: -1,
-              ),
-            ),
-            if (tokenSymbol != null) ...[
-              const SizedBox(width: 8),
-              Padding(
-                padding: const EdgeInsets.only(bottom: 6),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(
-                    tokenSymbol!,
-                    style: theme.textTheme.labelMedium?.copyWith(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
+        balance != null
+            ? _AnimatedBalanceText(
+                value: balance!,
+                tokenSymbol: tokenSymbol,
+                style: theme.textTheme.displaySmall?.copyWith(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: -1,
+                ),
+                symbolStyle: theme.textTheme.labelMedium?.copyWith(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                ),
+              )
+            : Text(
+                '---',
+                style: theme.textTheme.displaySmall?.copyWith(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: -1,
                 ),
               ),
-            ],
-          ],
-        ),
       ],
     );
   }
@@ -369,6 +361,72 @@ class WalletCard extends StatelessWidget {
   }
 
   String _formatBalance(double value) {
+    if (value >= 1000000) {
+      return '${(value / 1000000).toStringAsFixed(2)}M';
+    } else if (value >= 1000) {
+      return '${(value / 1000).toStringAsFixed(2)}K';
+    } else if (value >= 1) {
+      return value.toStringAsFixed(4);
+    } else {
+      return value.toStringAsFixed(6);
+    }
+  }
+}
+
+class _AnimatedBalanceText extends StatelessWidget {
+  final double value;
+  final String? tokenSymbol;
+  final TextStyle? style;
+  final TextStyle? symbolStyle;
+
+  const _AnimatedBalanceText({
+    required this.value,
+    this.tokenSymbol,
+    this.style,
+    this.symbolStyle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: value),
+      duration: const Duration(milliseconds: 2000),
+      curve: Curves.easeOutExpo,
+      builder: (context, val, child) {
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Text(
+              _format(val),
+              style: style,
+            ),
+            if (tokenSymbol != null) ...[
+              const SizedBox(width: 8),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    tokenSymbol!,
+                    style: symbolStyle,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        );
+      },
+    );
+  }
+
+  String _format(double value) {
     if (value >= 1000000) {
       return '${(value / 1000000).toStringAsFixed(2)}M';
     } else if (value >= 1000) {

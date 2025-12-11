@@ -83,7 +83,7 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
     super.dispose();
   }
 
-  void _listenToConnectionStatus() {
+  bool _listenToConnectionStatus() {
     final walletService = ref.read(walletServiceProvider);
 
     // IMPORTANT: Check current connection status FIRST before subscribing to stream.
@@ -98,8 +98,17 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
 
     if (currentStatus.isConnected && currentStatus.wallet != null) {
       AppLogger.i('[Onboarding] Already connected! Proceeding to completion.');
-      _handleConnectionSuccess(currentStatus.wallet!);
-      return; // Don't subscribe to stream - already connected
+      
+      // If restoring, give user a moment to see the "verifying/restoring" state
+      // before completing, otherwise it feels like a glitch.
+      if (widget.isRestoring) {
+        Future.delayed(const Duration(milliseconds: 1500), () {
+          if (mounted) _handleConnectionSuccess(currentStatus.wallet!);
+        });
+      } else {
+        _handleConnectionSuccess(currentStatus.wallet!);
+      }
+      return true; // Don't subscribe to stream - already connected
     }
 
     // Subscribe to stream for future status updates
@@ -127,6 +136,8 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
         });
       },
     );
+    
+    return false;
   }
 
   /// Handle successful wallet connection
@@ -138,6 +149,9 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
       'address': wallet.address,
       'type': wallet.type.name,
     });
+
+    // Ensure state is synced before navigation
+    ref.read(multiWalletNotifierProvider.notifier).registerWallet(wallet);
 
     setState(() => _currentStep = OnboardingStep.verifying);
 
@@ -162,12 +176,18 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
 
     try {
       // First, listen to connection status stream for future events
-      _listenToConnectionStatus();
+      final alreadyConnected = _listenToConnectionStatus();
 
       // If _listenToConnectionStatus already detected a connection, we're done
-      if (_currentStep == OnboardingStep.verifying ||
-          _currentStep == OnboardingStep.complete) {
+      if (alreadyConnected) {
         AppLogger.i('[Onboarding] Session already found during listen setup');
+        
+        // Ensure MultiWalletNotifier is aware of this restored connection
+        final currentWallet = ref.read(walletServiceProvider).currentConnectionStatus.wallet;
+        if (currentWallet != null) {
+          ref.read(multiWalletNotifierProvider.notifier).registerWallet(currentWallet);
+        }
+        
         return;
       }
 
@@ -205,10 +225,11 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
 
   Future<void> _initiateConnection() async {
     // Rabby는 WalletConnect Deep Link를 지원하지 않으므로 안내 다이얼로그 표시
-    if (widget.walletType == WalletType.rabby) {
-      _showRabbyGuideDialog();
-      return;
-    }
+    // Rabby connection block removed to allow deep link strategies to run
+    // if (widget.walletType == WalletType.rabby) {
+    //   _showRabbyGuideDialog();
+    //   return;
+    // }
 
     setState(() => _currentStep = OnboardingStep.openingWallet);
 

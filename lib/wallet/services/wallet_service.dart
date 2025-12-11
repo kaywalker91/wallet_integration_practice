@@ -10,8 +10,11 @@ import 'package:wallet_integration_practice/wallet/adapters/metamask_adapter.dar
 import 'package:wallet_integration_practice/wallet/adapters/phantom_adapter.dart';
 import 'package:wallet_integration_practice/wallet/adapters/trust_wallet_adapter.dart';
 import 'package:wallet_integration_practice/wallet/adapters/rabby_wallet_adapter.dart';
+import 'package:wallet_integration_practice/wallet/adapters/generic_wallet_connect_adapter.dart';
+import 'package:wallet_integration_practice/wallet/adapters/coinbase_wallet_adapter.dart';
 import 'package:wallet_integration_practice/wallet/adapters/okx_wallet_adapter.dart';
 import 'package:wallet_integration_practice/wallet/models/wallet_adapter_config.dart';
+import 'package:wallet_integration_practice/wallet/services/wallet_adapter_factory.dart';
 
 /// Wallet service that manages different wallet adapters.
 ///
@@ -106,6 +109,12 @@ class WalletService {
     return _connectedWallet?.address;
   }
 
+
+
+// ... (existing imports)
+
+  // ... (previous code)
+
   /// Initialize all adapters
   Future<void> initialize() async {
     AppLogger.wallet('Initializing wallet service');
@@ -113,54 +122,32 @@ class WalletService {
     // Register deep link handlers for wallet callbacks
     _setupDeepLinkHandlers();
 
-    // Initialize adapters lazily on first use
-    // This prevents unnecessary initialization of unused adapters
-
     AppLogger.wallet('Wallet service initialized');
   }
 
-  /// Setup deep link handlers for wallet app callbacks
   void _setupDeepLinkHandlers() {
     final deepLinkService = DeepLinkService.instance;
 
-    // Phantom callback handler
-    deepLinkService.registerHandler('phantom', (uri) async {
-      AppLogger.wallet('📱 Phantom deep link handler invoked', data: {'uri': uri.toString()});
-      await handleDeepLink(uri);
-    });
+    // Map of deep link keys to display names for logging
+    final handlers = {
+      'phantom': 'Phantom',
+      'metamask': 'MetaMask',
+      'wc': 'WalletConnect',
+      'trust': 'Trust Wallet',
+      'rabby': 'Rabby',
+      'okx': 'OKX Wallet',
+      'coinbase': 'Coinbase',
+    };
 
-    // MetaMask callback handler
-    deepLinkService.registerHandler('metamask', (uri) async {
-      AppLogger.wallet('📱 MetaMask deep link handler invoked', data: {'uri': uri.toString()});
-      await handleDeepLink(uri);
-    });
-
-    // WalletConnect callback handler
-    deepLinkService.registerHandler('wc', (uri) async {
-      AppLogger.wallet('📱 WalletConnect deep link handler invoked', data: {'uri': uri.toString()});
-      await handleDeepLink(uri);
-    });
-
-    // Trust Wallet callback handler
-    deepLinkService.registerHandler('trust', (uri) async {
-      AppLogger.wallet('📱 Trust Wallet deep link handler invoked', data: {'uri': uri.toString()});
-      await handleDeepLink(uri);
-    });
-
-    // Rabby callback handler
-    deepLinkService.registerHandler('rabby', (uri) async {
-      AppLogger.wallet('📱 Rabby deep link handler invoked', data: {'uri': uri.toString()});
-      await handleDeepLink(uri);
-    });
-
-    // OKX Wallet callback handler
-    deepLinkService.registerHandler('okx', (uri) async {
-      AppLogger.wallet('📱 OKX Wallet deep link handler invoked', data: {'uri': uri.toString()});
-      await handleDeepLink(uri);
+    handlers.forEach((key, name) {
+      deepLinkService.registerHandler(key, (uri) async {
+        AppLogger.wallet('📱 $name deep link handler invoked', data: {'uri': uri.toString()});
+        await handleDeepLink(uri);
+      });
     });
 
     AppLogger.wallet('✅ Deep link handlers registered', data: {
-      'handlers': ['phantom', 'metamask', 'wc', 'trust', 'rabby', 'okx'],
+      'handlers': handlers.keys.toList(),
     });
   }
 
@@ -170,33 +157,15 @@ class WalletService {
       return _adapters[type]!;
     }
 
-    final adapter = _createAdapter(type);
+    // Use Factory to create adapter
+    final adapter = WalletAdapterFactory.createAdapter(type, _config);
     await adapter.initialize();
     _adapters[type] = adapter;
 
     return adapter;
   }
-
-  BaseWalletAdapter _createAdapter(WalletType type) {
-    switch (type) {
-      case WalletType.metamask:
-        return MetaMaskAdapter(config: _config);
-      case WalletType.walletConnect:
-        return WalletConnectAdapter(config: _config);
-      case WalletType.phantom:
-        return PhantomAdapter();
-      case WalletType.trustWallet:
-        return TrustWalletAdapter(config: _config);
-      case WalletType.rabby:
-        return RabbyWalletAdapter(config: _config);
-      case WalletType.okxWallet:
-        return OkxWalletAdapter(config: _config);
-      case WalletType.coinbase:
-      case WalletType.rainbow:
-        // These wallets use WalletConnect with AppKit modal
-        return WalletConnectAdapter(config: _config);
-    }
-  }
+  
+  // _createAdapter method removed - logic moved to WalletAdapterFactory
 
   /// Connect to a wallet
   Future<WalletEntity> connect({

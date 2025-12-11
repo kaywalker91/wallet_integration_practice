@@ -10,6 +10,7 @@ import 'package:wallet_integration_practice/presentation/screens/onboarding/onbo
 import 'package:wallet_integration_practice/presentation/widgets/wallet/wallet_card.dart';
 import 'package:wallet_integration_practice/presentation/widgets/wallet/wallet_selector.dart';
 import 'package:wallet_integration_practice/presentation/widgets/wallet/connected_wallets_section.dart';
+import 'package:wallet_integration_practice/presentation/pages/wallet_connect_modal.dart';
 
 /// Main home screen
 class HomeScreen extends ConsumerStatefulWidget {
@@ -108,16 +109,23 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Future<void> _connectWallet(WalletInfo wallet) async {
-    // Navigate to OnboardingLoadingPage for wallet connection flow
-    // Connection logic is handled in OnboardingLoadingPage
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => OnboardingLoadingPage(
-          walletType: wallet.type,
+    if (wallet.type == WalletType.walletConnect) {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => const WalletConnectModal(), 
         ),
-      ),
-    );
+      );
+    } else {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => OnboardingLoadingPage(
+            walletType: wallet.type,
+          ),
+        ),
+      );
+    }
   }
+
 
   Future<void> _disconnectActiveWallet(String walletId) async {
     await ref

@@ -41,47 +41,105 @@ class RabbyWalletAdapter extends WalletConnectAdapter {
   }
 
   /// Open Rabby Wallet with WalletConnect URI
+  ///
+  /// Strategy order (optimized for mobile-to-mobile connection):
+  ///
+  /// 1. rabby://walletconnect?uri=... - Alternative path
+  /// 2. rabby://connect?uri=... - Connect path
+  /// 3. rabby://wc?uri=... - Standard WC path
+  /// 4. rabby://?uri=... - No path
+  /// 5. https://rabby.io/wc?uri=... - Universal Link
+  /// 6. wc:// scheme - OS wallet picker (Bottom to avoid OKX hijack)
+  /// 7. raw wc: URI - Last resort
   Future<bool> openWithUri(String wcUri) async {
     AppLogger.wallet('Attempting to open Rabby with WC URI', data: {
       'uriLength': wcUri.length,
       'uriPrefix': wcUri.substring(0, wcUri.length > 50 ? 50 : wcUri.length),
     });
 
+    // URL encode the URI for safe passing as a query parameter
     final encodedUri = Uri.encodeComponent(wcUri);
 
-    // 1. Try Custom Scheme (rabby://wc?uri=...)
-    // This is the most standard way for specific wallet Deep Links
+    // Strategy 1: Alternative path (rabby://walletconnect?uri=...)
+    try {
+      final altPathUrl = 'rabby://walletconnect?uri=$encodedUri';
+      final uri = Uri.parse(altPathUrl);
+
+      final launched = await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+      );
+
+      if (launched) {
+        AppLogger.wallet('Successfully launched Rabby with walletconnect path');
+        return true;
+      }
+    } catch (e) {
+      AppLogger.w('Rabby walletconnect path failed: $e');
+    }
+
+    // Strategy 2: Connect path (rabby://connect?uri=...)
+    try {
+      final connectUrl = 'rabby://connect?uri=$encodedUri';
+      final uri = Uri.parse(connectUrl);
+
+      final launched = await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+      );
+
+      if (launched) {
+        AppLogger.wallet('Successfully launched Rabby with connect path');
+        return true;
+      }
+    } catch (e) {
+      AppLogger.w('Rabby connect path failed: $e');
+    }
+
+    // Strategy 3: Standard WC path (rabby://wc?uri=...)
     final schemeUrl = 'rabby://wc?uri=$encodedUri';
-    
     try {
       final schemeUri = Uri.parse(schemeUrl);
-      // We check canLaunchUrl, but on Android 11+ it might return false even if installed
-      // so we try to launch anyway if it fails the check or if we want to force it
-      
       final launchedScheme = await launchUrl(
         schemeUri,
         mode: LaunchMode.externalApplication,
       );
-      
+
       if (launchedScheme) {
-        AppLogger.wallet('Successfully launched Rabby Custom Scheme');
+        AppLogger.wallet('Successfully launched Rabby Custom Scheme (wc path)');
         return true;
       }
     } catch (e) {
-      AppLogger.w('Rabby Custom Scheme failed: $e');
+      AppLogger.w('Rabby Custom Scheme (wc path) failed: $e');
     }
 
-    // 2. Try Universal Link (https://rabby.io/wc?uri=...)
-    // Fallback if custom scheme fails
+    // Strategy 4: No path, query param only (rabby://?uri=...)
+    try {
+      final noPathUrl = 'rabby://?uri=$encodedUri';
+      final uri = Uri.parse(noPathUrl);
+
+      final launched = await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+      );
+
+      if (launched) {
+        AppLogger.wallet('Successfully launched Rabby with no-path scheme');
+        return true;
+      }
+    } catch (e) {
+      AppLogger.w('Rabby no-path scheme failed: $e');
+    }
+
+    // Strategy 5: Universal Link (https://rabby.io/wc?uri=...)
     final universalUrl = 'https://rabby.io/wc?uri=$encodedUri';
-    
     try {
       final universalUri = Uri.parse(universalUrl);
       final launchedUniversal = await launchUrl(
         universalUri,
         mode: LaunchMode.externalApplication,
       );
-      
+
       if (launchedUniversal) {
         AppLogger.wallet('Successfully launched Rabby Universal Link');
         return true;
@@ -90,26 +148,45 @@ class RabbyWalletAdapter extends WalletConnectAdapter {
       AppLogger.w('Rabby Universal Link failed: $e');
     }
 
-    // 3. Fallback to raw wc: URI (OS picker)
+    // Strategy 6: wc:// scheme (OS wallet picker)
+    // Moved to bottom to avoid hijacking by other wallets (e.g., OKX)
     try {
-        final rawUri = Uri.parse(wcUri);
-        final launchedRaw = await launchUrl(
-            rawUri,
-            mode: LaunchMode.externalApplication,
-        );
-        if (launchedRaw) {
-             AppLogger.wallet('Launched raw WC URI');
-             return true;
-        }
+      final wcSchemeUri = wcUri.replaceFirst('wc:', 'wc://');
+      final uri = Uri.parse(wcSchemeUri);
+
+      final launched = await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+      );
+
+      if (launched) {
+        AppLogger.wallet('Successfully launched via wc:// scheme (OS wallet picker)');
+        return true;
+      }
     } catch (e) {
-        AppLogger.w('Raw WC URI launch failed: $e');
+      AppLogger.w('wc:// scheme launch failed: $e');
     }
 
-    // All formats failed
-    AppLogger.w('All Rabby deep link formats failed');
+    // Strategy 7: Raw wc: URI (last resort)
+    try {
+      final rawUri = Uri.parse(wcUri);
+      final launchedRaw = await launchUrl(
+        rawUri,
+        mode: LaunchMode.externalApplication,
+      );
+      if (launchedRaw) {
+        AppLogger.wallet('Launched raw WC URI');
+        return true;
+      }
+    } catch (e) {
+      AppLogger.w('Raw WC URI launch failed: $e');
+    }
+
+    // All strategies failed
+    AppLogger.w('All Rabby deep link strategies failed');
     throw WalletNotInstalledException(
       walletType: walletType.name,
-      message: 'Rabby Wallet is not installed',
+      message: 'Rabby Wallet is not installed or does not support deep linking',
     );
   }
 

@@ -141,20 +141,31 @@ class _WalletListTile extends StatelessWidget {
                 borderRadius: BorderRadius.circular(12),
               ),
               clipBehavior: Clip.antiAlias,
-              child: CachedNetworkImage(
-                imageUrl: wallet.iconUrl,
-                width: 48,
-                height: 48,
-                fit: BoxFit.cover,
-                placeholder: (context, url) => Icon(
-                  Icons.account_balance_wallet,
-                  color: theme.colorScheme.primary,
-                ),
-                errorWidget: (context, url, error) => Icon(
-                  Icons.account_balance_wallet,
-                  color: theme.colorScheme.primary,
-                ),
-              ),
+              child: wallet.iconUrl.startsWith('assets/')
+                  ? Image.asset(
+                      wallet.iconUrl,
+                      width: 48,
+                      height: 48,
+                      fit: BoxFit.cover,
+                      errorBuilder: (context, error, stackTrace) => Icon(
+                        Icons.account_balance_wallet,
+                        color: theme.colorScheme.primary,
+                      ),
+                    )
+                  : CachedNetworkImage(
+                      imageUrl: wallet.iconUrl,
+                      width: 48,
+                      height: 48,
+                      fit: BoxFit.cover,
+                      placeholder: (context, url) => Icon(
+                        Icons.account_balance_wallet,
+                        color: theme.colorScheme.primary,
+                      ),
+                      errorWidget: (context, url, error) => Icon(
+                        Icons.account_balance_wallet,
+                        color: theme.colorScheme.primary,
+                      ),
+                    ),
             ),
             const SizedBox(width: 12),
             Expanded(

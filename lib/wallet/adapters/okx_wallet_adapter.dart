@@ -777,7 +777,7 @@ class OkxWalletAdapter extends WalletConnectAdapter {
     final otherWallets = ['metamask', 'trust', 'phantom', 'rabby', 'rainbow', 'coinbase'];
     for (final wallet in otherWallets) {
       if (name.contains(wallet)) {
-        AppLogger.wallet('Session REJECTED: belongs to $wallet');
+        // AppLogger.d('Session belongs to $wallet (skipping OKX check)');
         return false;
       }
     }

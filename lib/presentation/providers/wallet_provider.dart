@@ -251,15 +251,23 @@ final supportedWalletsProvider = Provider<List<WalletInfo>>((ref) {
       type: WalletType.metamask,
       name: 'MetaMask',
       description: 'Popular browser-based wallet',
-      iconUrl: 'https://raw.githubusercontent.com/WalletConnect/walletconnect-assets/master/Icon/Gradient/Icon.png',
+      iconUrl: WalletType.metamask.iconAsset,
       supportsEvm: true,
       supportsSolana: false,
+    ),
+    WalletInfo(
+      type: WalletType.coinbase,
+      name: 'Coinbase Wallet',
+      description: 'Mobile & Chrome extension wallet',
+      iconUrl: WalletType.coinbase.iconAsset,
+      supportsEvm: true,
+      supportsSolana: true,
     ),
     WalletInfo(
       type: WalletType.trustWallet,
       name: 'Trust Wallet',
       description: 'Multi-chain mobile wallet',
-      iconUrl: 'https://trustwallet.com/assets/images/media/assets/TWT.png',
+      iconUrl: WalletType.trustWallet.iconAsset,
       supportsEvm: true,
       supportsSolana: true,
     ),
@@ -267,7 +275,7 @@ final supportedWalletsProvider = Provider<List<WalletInfo>>((ref) {
       type: WalletType.phantom,
       name: 'Phantom',
       description: 'Solana & Ethereum wallet',
-      iconUrl: 'https://avatars.githubusercontent.com/u/78782331?s=200&v=4',
+      iconUrl: WalletType.phantom.iconAsset,
       supportsEvm: true,
       supportsSolana: true,
     ),
@@ -275,7 +283,7 @@ final supportedWalletsProvider = Provider<List<WalletInfo>>((ref) {
       type: WalletType.rabby,
       name: 'Rabby',
       description: 'Multi-chain browser wallet',
-      iconUrl: 'https://avatars.githubusercontent.com/u/81706530?s=200&v=4',
+      iconUrl: WalletType.rabby.iconAsset,
       supportsEvm: true,
       supportsSolana: false,
     ),
@@ -283,7 +291,15 @@ final supportedWalletsProvider = Provider<List<WalletInfo>>((ref) {
       type: WalletType.okxWallet,
       name: 'OKX Wallet',
       description: 'Multi-chain crypto wallet',
-      iconUrl: 'https://static.okx.com/cdn/assets/imgs/221/C5E8A21B2D854E5B.png',
+      iconUrl: WalletType.okxWallet.iconAsset,
+      supportsEvm: true,
+      supportsSolana: true,
+    ),
+    WalletInfo(
+      type: WalletType.walletConnect,
+      name: 'WalletConnect',
+      description: 'Connect any supported wallet',
+      iconUrl: WalletType.walletConnect.iconAsset,
       supportsEvm: true,
       supportsSolana: true,
     ),
@@ -433,6 +449,46 @@ class MultiWalletNotifier extends Notifier<MultiWalletState> {
     } finally {
       await statusSubscription.cancel();
     }
+  }
+
+  /// Register an already connected wallet (e.g. from session restoration)
+  void registerWallet(WalletEntity wallet) {
+    // 1. Remove any pending/connecting entries for this wallet type
+    // This prevents duplicate "Connecting..." placeholders from remaining
+    final connectingEntries = state.wallets.where(
+      (w) => w.wallet.type == wallet.type && w.status == WalletEntryStatus.connecting
+    ).toList();
+    
+    for (final entry in connectingEntries) {
+      state = state.removeWallet(entry.id);
+    }
+
+    final realId = ConnectedWalletEntry.generateId(wallet);
+
+    // Check if wallet already exists
+    if (state.containsWallet(realId)) {
+      // Ensure it's active if it's the only one or currently connected
+      if (!state.hasActiveWallet) {
+        state = state.setActiveWallet(realId);
+      }
+      return;
+    }
+
+    final newEntry = ConnectedWalletEntry.connected(
+      wallet,
+      isActive: !state.hasActiveWallet,
+    );
+    state = state.addWallet(newEntry);
+
+    // Set as active if first wallet
+    if (!state.hasActiveWallet || state.connectedCount == 1) {
+      state = state.setActiveWallet(realId);
+    }
+    
+    AppLogger.wallet('Multi-wallet: Registered restored wallet', data: {
+      'id': realId,
+      'address': wallet.address,
+    });
   }
 
   /// Disconnect a specific wallet by ID

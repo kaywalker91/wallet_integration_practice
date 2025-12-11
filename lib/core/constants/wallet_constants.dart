@@ -89,21 +89,21 @@ extension WalletTypeExtension on WalletType {
   String get iconAsset {
     switch (this) {
       case WalletType.metamask:
-        return 'assets/icons/metamask.png';
+        return 'assets/icons/icon_metamask.png';
       case WalletType.walletConnect:
-        return 'assets/icons/walletconnect.png';
+        return 'assets/icons/icon_walletconnect.png';
       case WalletType.coinbase:
-        return 'assets/icons/coinbase.png';
+        return 'assets/icons/icon_coinbasewallet.png';
       case WalletType.trustWallet:
-        return 'assets/icons/trust.png';
+        return 'assets/icons/icon_trustwallet.png';
       case WalletType.rainbow:
-        return 'assets/icons/rainbow.png';
+        return 'assets/icons/icon_rainbow.png'; // Assuming consistency, though file not seen in list
       case WalletType.phantom:
-        return 'assets/icons/phantom.png';
+        return 'assets/icons/icon_phantom.png';
       case WalletType.rabby:
-        return 'assets/icons/rabby.png';
+        return 'assets/icons/icon_rabbywallet.png';
       case WalletType.okxWallet:
-        return 'assets/icons/okx.png';
+        return 'assets/icons/icon_okxwallet.png';
     }
   }
 

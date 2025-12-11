@@ -105,11 +105,12 @@ final chainBalanceProvider =
 
 /// Provider for current connected chain's balance
 final currentChainBalanceProvider = FutureProvider<NativeBalanceEntity?>((ref) async {
-  final wallet = ref.watch(connectedWalletProvider);
-  AppLogger.d('[DEBUG] currentChainBalanceProvider called - wallet: $wallet');
+  final activeEntry = ref.watch(activeWalletEntryProvider);
+  final wallet = activeEntry?.wallet;
+  AppLogger.d('[DEBUG] currentChainBalanceProvider called - wallet: ${wallet?.address}');
 
   if (wallet == null) {
-    AppLogger.w('[DEBUG] currentChainBalanceProvider: wallet is null');
+    // Return null silently if no wallet is active - this is normal state
     return null;
   }
 
