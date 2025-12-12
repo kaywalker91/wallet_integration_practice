@@ -1,249 +1,228 @@
-import 'dart:async' show Completer, StreamSubscription, unawaited;
-import 'dart:io';
-import 'package:reown_appkit/reown_appkit.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'dart:async';
+import 'dart:convert';
+import 'package:coinbase_wallet_sdk/action.dart' as cb;
+import 'package:coinbase_wallet_sdk/coinbase_wallet_sdk.dart' as cb;
+import 'package:coinbase_wallet_sdk/configuration.dart' as cb;
+import 'package:coinbase_wallet_sdk/eth_web3_rpc.dart' as cb;
 import 'package:wallet_integration_practice/core/core.dart';
+import 'package:wallet_integration_practice/domain/entities/transaction_entity.dart';
 import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
-import 'package:wallet_integration_practice/wallet/adapters/walletconnect_adapter.dart';
+import 'package:wallet_integration_practice/wallet/adapters/base_wallet_adapter.dart';
+import 'package:wallet_integration_practice/wallet/models/wallet_adapter_config.dart';
 
-/// Coinbase Wallet adapter (extends WalletConnect with specialized deep linking)
-///
-/// Handles connection with Coinbase Wallet (Self-Custody) via WalletConnect,
-/// using proper Universal Links and Custom Schemes for mobile redirection.
-class CoinbaseWalletAdapter extends WalletConnectAdapter {
-  CoinbaseWalletAdapter({super.config});
+class CoinbaseWalletAdapter extends EvmWalletAdapter {
+  final WalletAdapterConfig config;
+  final _connectionController = StreamController<WalletConnectionStatus>.broadcast();
+
+  bool _isInitialized = false;
+  WalletEntity? _connectedWallet;
+  String? _currentAddress;
+  int _currentChainId = 1; // Default to mainnet
+
+  CoinbaseWalletAdapter({required this.config});
 
   @override
   WalletType get walletType => WalletType.coinbase;
 
-  /// Check if Coinbase Wallet is installed
-  Future<bool> isCoinbaseInstalled() async {
-    try {
-      final uri = Uri.parse(WalletConstants.coinbaseDeepLink);
-      final canLaunch = await canLaunchUrl(uri);
-      AppLogger.wallet('Coinbase installed check', data: {'installed': canLaunch});
-      return canLaunch;
-    } catch (e) {
-      AppLogger.e('Error checking Coinbase installation', e);
-      return false;
-    }
-  }
-
-  /// Open Coinbase Wallet app
-  Future<bool> openCoinbase() async {
-    try {
-      final uri = Uri.parse(WalletConstants.coinbaseDeepLink);
-      return await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } catch (e) {
-      AppLogger.e('Error opening Coinbase Wallet', e);
-      return false;
-    }
-  }
-
-  /// Open Coinbase Wallet with WalletConnect URI
-  ///
-  /// Strategy order:
-  /// 1. https://go.cb-w.com/wallet-connect?uri=... (Universal Link - Preferred)
-  /// 2. cbwallet://wcc?uri=... (Current Custom Scheme)
-  /// 3. cbwallet://wc?uri=... (Legacy Custom Scheme)
-  /// 4. wc:// scheme (OS fallback)
-  Future<bool> openWithUri(String wcUri) async {
-    AppLogger.wallet('Attempting to open Coinbase with WC URI', data: {
-      'uriLength': wcUri.length,
-      'uriPrefix': wcUri.substring(0, wcUri.length > 50 ? 50 : wcUri.length),
-    });
-
-    final encodedUri = Uri.encodeComponent(wcUri);
-
-    // Strategy 1: Standard Custom Scheme (Android Preferred)
-    // cbwallet://wc?uri={uri}
-    try {
-      final wcUrl = 'cbwallet://wc?uri=$encodedUri';
-      final uri = Uri.parse(wcUrl);
-
-      final launched = await launchUrl(
-        uri,
-        mode: LaunchMode.externalApplication,
-      );
-
-      if (launched) {
-        AppLogger.wallet('Successfully launched Coinbase wc scheme');
-        return true;
-      }
-    } catch (e) {
-      AppLogger.w('Coinbase wc scheme failed: $e');
-    }
-
-    // Strategy 2: Universal Link (Standard)
-    // https://go.cb-w.com/wc?uri={uri}
-    try {
-      final universalUrl = 'https://go.cb-w.com/wc?uri=$encodedUri';
-      final uri = Uri.parse(universalUrl);
-
-      final launched = await launchUrl(
-        uri,
-        mode: LaunchMode.externalApplication,
-      );
-
-      if (launched) {
-        AppLogger.wallet('Successfully launched Coinbase Universal Link (wc path)');
-        return true;
-      }
-    } catch (e) {
-      AppLogger.w('Coinbase Universal Link failed: $e');
-    }
-
-    // Strategy 3: Alternative Custom Scheme
-    // cbwallet://wcc?uri={uri}
-    try {
-      final wccUrl = 'cbwallet://wcc?uri=$encodedUri';
-      final uri = Uri.parse(wccUrl);
-
-      final launched = await launchUrl(
-        uri,
-        mode: LaunchMode.externalApplication,
-      );
-
-      if (launched) {
-        AppLogger.wallet('Successfully launched Coinbase wcc scheme');
-        return true;
-      }
-    } catch (e) {
-      AppLogger.w('Coinbase wcc scheme failed: $e');
-    }
-
-    // Strategy 4: wc:// fallback
-    try {
-      final wcSchemeUri = wcUri.replaceFirst('wc:', 'wc://');
-      final uri = Uri.parse(wcSchemeUri);
-
-      final launched = await launchUrl(
-        uri,
-        mode: LaunchMode.externalApplication,
-      );
-
-      if (launched) {
-        AppLogger.wallet('Successfully launched via wc:// scheme');
-        return true;
-      }
-    } catch (e) {
-      AppLogger.w('wc:// scheme launch failed: $e');
-    }
-
-    AppLogger.w('All Coinbase deep link strategies failed');
-    throw WalletNotInstalledException(
-      walletType: walletType.name,
-      message: 'Coinbase Wallet is not installed or does not support deep linking',
-    );
-  }
-
-  /// Wait for URI to be generated with polling
-  Future<String?> _waitForUri({
-    Duration timeout = const Duration(seconds: 5),
-    Duration pollInterval = const Duration(milliseconds: 200),
-  }) async {
-    final stopwatch = Stopwatch()..start();
-
-    while (stopwatch.elapsed < timeout) {
-      final uri = await getConnectionUri();
-      if (uri != null && uri.isNotEmpty) {
-        AppLogger.wallet('URI obtained', data: {
-          'waitTime': '${stopwatch.elapsedMilliseconds}ms',
-        });
-        return uri;
-      }
-      await Future.delayed(pollInterval);
-    }
-
-    AppLogger.w('URI generation timed out after ${timeout.inSeconds}s');
-    return null;
-  }
+  @override
+  bool get isInitialized => _isInitialized;
 
   @override
-  bool isSessionValid(SessionData session) {
-    final name = session.peer?.metadata.name.toLowerCase() ?? '';
-    // Allow 'coinbase' or generic if needed, but filtering helps avoid cross-wallet confusion
-    return name.contains('coinbase') || name.contains('toshi');
+  bool get isConnected => _connectedWallet != null;
+
+  @override
+  String? get connectedAddress => _currentAddress;
+
+  @override
+  int? get currentChainId => _currentChainId;
+
+  @override
+  Stream<WalletConnectionStatus> get connectionStream => _connectionController.stream;
+
+  @override
+  Future<void> initialize() async {
+    try {
+      await cb.CoinbaseWalletSDK.shared.configure(
+        cb.Configuration(
+          ios: cb.IOSConfiguration(
+            host: Uri.parse('${AppConstants.deepLinkScheme}://'),
+            callback: Uri.parse('${AppConstants.deepLinkScheme}://'),
+          ),
+          android: cb.AndroidConfiguration(
+            domain: Uri.parse('${AppConstants.deepLinkScheme}://'),
+          ),
+        ),
+      );
+      _isInitialized = true;
+      AppLogger.wallet('Coinbase SDK initialized');
+    } catch (e) {
+      AppLogger.e('Failed to initialize Coinbase SDK', e);
+    }
   }
 
   @override
   Future<WalletEntity> connect({int? chainId, String? cluster}) async {
-    AppLogger.wallet('CoinbaseWalletAdapter.connect() started');
-
-    await initialize();
-
-    if (isConnected && connectedAddress != null) {
-      AppLogger.wallet('Reusing existing session');
-      return WalletEntity(
-        address: connectedAddress!,
-        type: walletType,
-        chainId: requestedChainId ?? currentChainId,
-        connectedAt: DateTime.now(),
-      );
-    }
-
-    final completer = Completer<WalletEntity>();
-    StreamSubscription? subscription;
-
-    subscription = connectionStream.listen(
-      (status) {
-        if (status.isConnected && status.wallet != null) {
-          if (!completer.isCompleted) {
-            completer.complete(status.wallet!.copyWith(type: walletType));
-          }
-        } else if (status.hasError) {
-          if (!completer.isCompleted) {
-            completer.completeError(
-              WalletException(
-                message: status.errorMessage ?? 'Connection failed',
-                code: 'CONNECTION_ERROR',
-              ),
-            );
-          }
-        }
-      },
-      onError: (error) {
-        if (!completer.isCompleted) {
-          completer.completeError(error);
-        }
-      },
-    );
+    _connectionController.add(WalletConnectionStatus.connecting());
 
     try {
-      // Start connection (generates URI)
-      unawaited(super.connect(chainId: chainId, cluster: cluster));
+      AppLogger.wallet('Initiating Coinbase SDK Handshake');
 
-      // Wait for URI
-      final uri = await _waitForUri();
+      final actions = <cb.Action>[
+        const cb.RequestAccounts(),
+      ];
 
-      if (uri == null) {
-        throw const WalletException(
-          message: 'Failed to generate connection URI',
-          code: 'URI_GENERATION_FAILED',
-        );
+      final results = await cb.CoinbaseWalletSDK.shared.initiateHandshake(actions);
+
+      if (results.isEmpty) {
+        throw Exception('Handshake returned no results');
       }
 
-      // Open Coinbase Wallet
-      await openWithUri(uri);
+      final accountResult = results.first;
 
-      // Wait for specific connection approval
-      AppLogger.wallet('Waiting for Coinbase approval...');
-      final wallet = await completer.future.timeout(
-        AppConstants.connectionTimeout,
-        onTimeout: () {
-          throw const WalletException(
-            message: 'Connection timed out. Please approve in Coinbase Wallet.',
-            code: 'TIMEOUT',
-          );
-        },
+      if (accountResult.error != null) {
+        throw Exception('Coinbase error: ${accountResult.error?.message}');
+      }
+
+      final dynamic value = accountResult.value;
+      String address;
+
+      if (value is List) {
+        if (value.isEmpty) {
+          throw Exception('Handshake returned empty accounts list');
+        }
+        address = value.first.toString();
+      } else if (value is Map) {
+        if (value.containsKey('address')) {
+           address = value['address'].toString();
+           if (value.containsKey('networkId')) {
+             _currentChainId = int.tryParse(value['networkId'].toString()) ?? 1;
+           }
+        } else {
+           throw Exception('Map result missing "address" key: $value');
+        }
+      } else if (value is String) {
+        if (value.trim().startsWith('{')) {
+           try {
+             final Map<String, dynamic> jsonMap = jsonDecode(value);
+             if (jsonMap.containsKey('address')) {
+                address = jsonMap['address'].toString();
+                if (jsonMap.containsKey('networkId')) {
+                  _currentChainId = int.tryParse(jsonMap['networkId'].toString()) ?? 1;
+                }
+             } else {
+                address = value; // Fallback
+             }
+           } catch (e) {
+             address = value;
+           }
+        } else {
+             address = value;
+        }
+      } else {
+         AppLogger.wallet('Parsing Coinbase result value: $value (${value.runtimeType})');
+         if (value.toString().startsWith('0x')) {
+            address = value.toString();
+         } else {
+            throw Exception('Unexpected account result format: $value');
+         }
+      }
+
+      _currentAddress = address;
+      _currentChainId = chainId ?? 1;
+
+      final wallet = WalletEntity(
+        address: address,
+        type: walletType,
+        chainId: _currentChainId,
+        connectedAt: DateTime.now(),
       );
 
+      _connectedWallet = wallet;
+      _connectionController.add(WalletConnectionStatus.connected(wallet));
+      AppLogger.wallet('Coinbase connected via SDK: $address');
+      
       return wallet;
+
     } catch (e) {
       AppLogger.e('Coinbase connection failed', e);
+      _connectionController.add(WalletConnectionStatus.error(e.toString()));
       rethrow;
-    } finally {
-      await subscription.cancel();
     }
+  }
+
+  @override
+  Future<void> disconnect() async {
+    try {
+      await cb.CoinbaseWalletSDK.shared.resetSession();
+    } catch (e) {
+         AppLogger.e('Error resetting session', e);
+    }
+    
+    _connectedWallet = null;
+    _currentAddress = null;
+    _connectionController.add(WalletConnectionStatus.disconnected());
+    AppLogger.wallet('Coinbase disconnected');
+  }
+
+  @override
+  Future<String?> getConnectionUri() async {
+    // Native SDK handles UI, no URI to display
+    return null;
+  }
+
+  @override
+  Future<List<String>> getAccounts() async {
+    return _currentAddress != null ? [_currentAddress!] : [];
+  }
+
+  @override
+  Future<int> getChainId() async {
+    return _currentChainId;
+  }
+  
+  // -- Unimplemented / To Do methods --
+
+  @override
+  Future<void> addChain({
+    required int chainId,
+    required String chainName,
+    required String rpcUrl,
+    required String symbol,
+    required int decimals,
+    String? explorerUrl,
+  }) async {
+    // Implement using 'wallet_addEthereumChain' action if needed
+    throw UnimplementedError('addChain not implemented for Coinbase SDK yet');
+  }
+
+  @override
+  Future<void> switchChain(int chainId) async {
+    // Implement using 'wallet_switchEthereumChain' action
+    // await CoinbaseWalletSDK.shared.makeRequest(...)
+    _currentChainId = chainId; // Optimistic update
+    throw UnimplementedError('switchChain not implemented for Coinbase SDK yet');
+  }
+
+  @override
+  Future<String> sendTransaction(TransactionRequest request) async {
+    // Implement using 'eth_sendTransaction' action
+    throw UnimplementedError('sendTransaction not implemented for Coinbase SDK yet');
+  }
+
+  @override
+  Future<String> personalSign(String message, String address) async {
+    // Implement using 'personal_sign' action
+     throw UnimplementedError('personalSign not implemented for Coinbase SDK yet');
+  }
+
+  @override
+  Future<String> signTypedData(String address, Map<String, dynamic> typedData) async {
+    // Implement using 'eth_signTypedData_v4' action
+    throw UnimplementedError('signTypedData not implemented for Coinbase SDK yet');
+  }
+
+  @override
+  Future<void> dispose() async {
+    await _connectionController.close();
   }
 }

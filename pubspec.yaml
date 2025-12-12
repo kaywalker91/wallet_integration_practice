@@ -50,6 +50,8 @@ dependencies:
   # Cryptography (for Phantom X25519 encryption)
   pinenacl: ^0.6.0
   flutter_dotenv: ^6.0.0
+  android_intent_plus: ^6.0.0
+  coinbase_wallet_sdk: ^1.0.10
 
 dev_dependencies:
   flutter_test:
