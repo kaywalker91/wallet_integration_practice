@@ -11,6 +11,21 @@ Wallet Integration Practice for iLity Hub
 
 ## Recent Changes
 
+### 2025-12-12: Coinbase Wallet Native SDK & Reown AppKit Integration
+
+**Feature**: Migrated Coinbase Wallet integration to use native SDK and introduced Reown AppKit for unified WalletConnect handling.
+
+**Changes**:
+- **Coinbase Wallet**: Switched from generic WalletConnect to `coinbase_wallet_sdk` for better native experience on Android/iOS.
+- **Reown AppKit**: Added `ReownAppKitService` to manage WalletConnect sessions, replacing custom implementation for better reliability and feature set.
+- **Configuration**: Updated `AndroidManifest.xml` with required package visibility queries and deep link schemes for Coinbase Wallet.
+
+**Files Changed**:
+- `lib/wallet/adapters/coinbase_wallet_adapter.dart`
+- `lib/wallet/services/reown_appkit_service.dart` (New)
+- `android/app/src/main/AndroidManifest.xml`
+- `pubspec.yaml`
+
 ### 2025-12-10: Fix infinite loading on wallet return
 
 **Problem**: After approving connection in OKX Wallet and returning to the app, the onboarding screen would show infinite loading.
