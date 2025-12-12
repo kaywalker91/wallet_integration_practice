@@ -11,7 +11,7 @@ Wallet Integration Practice for iLity Hub
 
 ## Recent Changes
 
-### 2024-12-10: Fix infinite loading on wallet return
+### 2025-12-10: Fix infinite loading on wallet return
 
 **Problem**: After approving connection in OKX Wallet and returning to the app, the onboarding screen would show infinite loading.
 
