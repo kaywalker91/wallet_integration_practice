@@ -122,7 +122,7 @@ class _RabbyGuideDialogState extends State<RabbyGuideDialog> {
                   const SizedBox(height: 12),
                   _buildStep(theme, 1, 'URL을 복사하세요'),
                   const SizedBox(height: 8),
-                  _buildStep(theme, 2, 'Rabby 앱 → 브라우저 탭'),
+                  _buildStep(theme, 2, 'Rabby 앱 → Dapps 탭'),
                   const SizedBox(height: 8),
                   _buildStep(theme, 3, 'URL 붙여넣기 → 연결'),
                 ],

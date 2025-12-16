@@ -22,7 +22,8 @@ class AppConstants {
   static const String universalLinkHost = 'ility.io';
 
   // dApp URL for in-app browser connections (e.g., Rabby)
-  static const String dappUrl = 'https://app.ility.io';
+  // NOTE: Currently pointing to development server
+  static const String dappUrl = 'https://ility-hub.dev.forlong.io/leaderboard/top-asset';
 
   // Storage Keys
   static const String walletSessionKey = 'wallet_session';

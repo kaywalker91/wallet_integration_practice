@@ -337,11 +337,10 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
 
   Future<void> _initiateConnection() async {
     // Rabby는 WalletConnect Deep Link를 지원하지 않으므로 안내 다이얼로그 표시
-    // Rabby connection block removed to allow deep link strategies to run
-    // if (widget.walletType == WalletType.rabby) {
-    //   _showRabbyGuideDialog();
-    //   return;
-    // }
+    if (widget.walletType == WalletType.rabby) {
+      _showRabbyGuideDialog();
+      return;
+    }
 
     setState(() => _currentStep = OnboardingStep.openingWallet);
 

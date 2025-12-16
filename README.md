@@ -11,6 +11,22 @@ Wallet Integration Practice for iLity Hub
 
 ## Recent Changes
 
+### 2025-12-16: Rabby Wallet UX & dApp URL Configuration
+
+**Feature**: Improved Rabby Wallet connection flow and updated dApp URL configuration.
+
+**Changes**:
+- **Rabby Wallet**: Re-enabled dedicated guide dialog for Rabby Wallet users, as it requires a manual dApp browser connection flow instead of standard deep linking.
+- **UI Text**: Updated Rabby Wallet guide text to correctly refer to the "Dapps" tab instead of "Browser".
+- **Configuration**: Updated `dappUrl` to point to the active development environment for better integration testing.
+
+**Files Changed**:
+- `lib/core/constants/app_constants.dart`
+- `lib/presentation/screens/onboarding/onboarding_loading_page.dart`
+- `lib/presentation/screens/onboarding/rabby_guide_dialog.dart`
+
+---
+
 ### 2025-12-16: Trust Wallet Connection UX Improvement
 
 **Problem**: Trust Wallet 연결 시 최종적으로 연결 성공하지만, 중간에 "연결 실패" 메시지가 일시적으로 표시되는 문제.
