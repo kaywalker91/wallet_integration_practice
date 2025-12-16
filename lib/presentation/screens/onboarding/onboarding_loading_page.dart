@@ -48,6 +48,14 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
   StreamSubscription? _connectionSubscription;
   late AnimationController _pulseController;
 
+  /// Counter for temporary errors - allows recovery attempts before showing error UI
+  /// This prevents the "연결 실패" message from appearing during temporary disconnections
+  int _temporaryErrorCount = 0;
+  static const int _maxTemporaryErrors = 3;
+
+  /// Timer for delayed error handling - gives connection time to recover
+  Timer? _errorDelayTimer;
+
   @override
   void initState() {
     super.initState();
@@ -80,6 +88,7 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
   @override
   void dispose() {
     _connectionSubscription?.cancel();
+    _errorDelayTimer?.cancel();
     _pulseController.dispose();
     super.dispose();
   }
@@ -120,13 +129,40 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
         if (status.isConnected && status.wallet != null) {
           _handleConnectionSuccess(status.wallet!);
         } else if (status.hasError) {
-          // Connection failed - clear pending state
-          ref.read(pendingConnectionServiceProvider).clearPendingConnection();
+          // CRITICAL: Don't immediately show error - allow recovery attempts
+          // WalletConnect may emit temporary errors during relay reconnection
+          _temporaryErrorCount++;
 
-          setState(() {
-            _currentStep = OnboardingStep.error;
-            _errorMessage = status.errorMessage ?? 'Connection failed';
-          });
+          AppLogger.w('[Onboarding] Temporary error #$_temporaryErrorCount: ${status.errorMessage}');
+
+          // Check if this is a fatal error that should be shown immediately
+          final isFatalError = _isFatalConnectionError(status.errorMessage);
+
+          if (isFatalError || _temporaryErrorCount >= _maxTemporaryErrors) {
+            // Fatal error or too many temporary errors - show error UI
+            _errorDelayTimer?.cancel();
+            ref.read(pendingConnectionServiceProvider).clearPendingConnection();
+
+            setState(() {
+              _currentStep = OnboardingStep.error;
+              _errorMessage = status.errorMessage ?? '연결에 실패했습니다.';
+            });
+          } else {
+            // Temporary error - schedule delayed error check
+            // If connection succeeds within this delay, the timer will be cancelled
+            _errorDelayTimer?.cancel();
+            _errorDelayTimer = Timer(const Duration(seconds: 3), () {
+              // After delay, check if still not connected
+              final currentStatus = ref.read(walletServiceProvider).currentConnectionStatus;
+              if (!currentStatus.isConnected && mounted) {
+                ref.read(pendingConnectionServiceProvider).clearPendingConnection();
+                setState(() {
+                  _currentStep = OnboardingStep.error;
+                  _errorMessage = status.errorMessage ?? '연결에 실패했습니다.';
+                });
+              }
+            });
+          }
         }
       },
       onError: (error) {
@@ -143,6 +179,10 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
 
   /// Handle successful wallet connection
   void _handleConnectionSuccess(WalletEntity wallet) {
+    // Cancel any pending error timer - connection succeeded!
+    _errorDelayTimer?.cancel();
+    _temporaryErrorCount = 0;
+
     // Clear pending state
     ref.read(pendingConnectionServiceProvider).clearPendingConnection();
 
@@ -227,7 +267,14 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
           return;
         }
 
-        AppLogger.i('[Onboarding] Relay connected, checking session...');
+        AppLogger.i('[Onboarding] Relay connected, waiting for session sync...');
+
+        // CRITICAL: Add delay to allow session to propagate after relay reconnection
+        // The relay may have reconnected but the session data may not have synced yet
+        // This is especially important for Trust Wallet which has slower session propagation
+        await Future.delayed(const Duration(milliseconds: 500));
+
+        AppLogger.i('[Onboarding] Checking session...');
       }
 
       // Check if we're now connected after relay reconnection
@@ -257,15 +304,23 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
         return;
       }
 
-      // Session not found after relay reconnection - may have expired or was never established
-      AppLogger.w('[Onboarding] No valid session found after relay reconnection');
-      ref.read(pendingConnectionServiceProvider).clearPendingConnection();
+      // Session not found after relay reconnection
+      // DON'T show error immediately! WalletConnect retry logic may still succeed.
+      // Trust Wallet especially has slow session propagation.
+      // Just log warning and keep waiting - the stream listener will handle eventual connection or timeout.
+      AppLogger.w('[Onboarding] No valid session found yet after relay reconnection, waiting for retry...');
 
-      if (mounted) {
-        setState(() {
-          _currentStep = OnboardingStep.error;
-          _errorMessage = '연결을 찾을 수 없습니다. 다시 연결을 시도해 주세요.';
-        });
+      // Keep the UI in "verifying/waiting" state instead of showing error
+      // The connection stream listener will eventually:
+      // 1. Receive successful connection → navigate to home
+      // 2. Receive fatal error after all retries → show error
+      // 3. Timeout after max retries → show error
+      //
+      // Note: We do NOT call clearPendingConnection() here because
+      // the retry logic is still active and may succeed.
+      if (mounted && _currentStep == OnboardingStep.verifying) {
+        // Stay in verifying state - don't change to error
+        AppLogger.i('[Onboarding] Keeping verifying state, retry logic active');
       }
     } catch (e) {
       AppLogger.e('[Onboarding] Session restore error', e);
@@ -667,7 +722,25 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
     );
   }
 
+  /// Check if the error is fatal and should immediately show error UI
+  /// Temporary/recoverable errors should allow time for reconnection
+  bool _isFatalConnectionError(String? errorMessage) {
+    if (errorMessage == null) return false;
 
+    final fatalPatterns = [
+      '설치되어 있지 않습니다', // Wallet not installed
+      'not installed',
+      'User rejected', // User explicitly rejected
+      'rejected the request',
+      '취소', // User cancelled
+      'cancelled',
+      'denied',
+    ];
+
+    final lowerMessage = errorMessage.toLowerCase();
+    return fatalPatterns
+        .any((pattern) => lowerMessage.contains(pattern.toLowerCase()));
+  }
 
   Color _getWalletColor(WalletType type) {
     switch (type) {

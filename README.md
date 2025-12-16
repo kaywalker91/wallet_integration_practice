@@ -11,6 +11,27 @@ Wallet Integration Practice for iLity Hub
 
 ## Recent Changes
 
+### 2025-12-16: Trust Wallet Connection UX Improvement
+
+**Problem**: Trust Wallet 연결 시 최종적으로 연결 성공하지만, 중간에 "연결 실패" 메시지가 일시적으로 표시되는 문제.
+
+**Root Cause**: `_restoreAndCheckSession()` 메서드에서 relay 재연결 후 세션이 즉시 발견되지 않으면 에러 UI를 바로 표시. Trust Wallet은 세션 동기화가 느려서 500ms 대기 후에도 세션이 준비되지 않을 수 있지만, retry 로직이 작동하면 결국 연결됨.
+
+**Solution**:
+1. `_restoreAndCheckSession()`에서 즉시 에러 UI 표시 대신 "서명 검증 중" 상태 유지
+2. `clearPendingConnection()` 조기 호출 제거 → retry 로직이 계속 작동
+3. 기존 스트림 리스너가 최종 연결 성공/실패 처리하도록 위임
+
+**Expected Behavior**:
+- 연결 중: "서명 검증 중" 상태 유지
+- 연결 성공: 메인 화면으로 이동
+- 진짜 연결 실패: timeout 후 에러 표시
+
+**Files Changed**:
+- `lib/presentation/screens/onboarding/onboarding_loading_page.dart` - Removed premature error UI display
+
+---
+
 ### 2025-12-16: OKX Wallet Connection Stability Fixes
 
 **Problem 1**: OKX Wallet connection infinite approval loop after app cold start.
