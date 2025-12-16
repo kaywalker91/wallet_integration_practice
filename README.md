@@ -11,6 +11,36 @@ Wallet Integration Practice for iLity Hub
 
 ## Recent Changes
 
+### 2025-12-16: OKX Wallet Connection Stability Fixes
+
+**Problem 1**: OKX Wallet connection infinite approval loop after app cold start.
+
+**Root Cause**: When Android kills the app process while user is in OKX Wallet, the WalletConnect WebSocket relay connection is lost but session objects persist in storage, causing a mismatch.
+
+**Solution**:
+1. Added relay state tracking and `ensureRelayConnected()` method in `WalletConnectAdapter`
+2. Modified `_restoreSession()` to verify relay connection before restoring sessions
+3. Added `initializeAdapter()` method in `WalletService` for restoration without new connection
+4. Updated `OnboardingLoadingPage` to use relay reconnection flow
+
+**Problem 2**: Black screen after returning from OKX Wallet on Samsung Galaxy devices.
+
+**Root Cause**: Impeller (Vulkan) rendering engine compatibility issue with Mali GPU. Surface recreation fails on app resume.
+
+**Solution**:
+1. Disabled Impeller rendering engine (fallback to Skia/OpenGL)
+2. Changed `launchMode` from `singleTop` to `singleTask` for stable Activity reuse
+3. Added app-level `WidgetsBindingObserver` for forced UI redraw on resume
+
+**Files Changed**:
+- `android/app/src/main/AndroidManifest.xml` - Impeller disable, launchMode change
+- `lib/main.dart` - Added lifecycle observer for UI redraw
+- `lib/wallet/adapters/walletconnect_adapter.dart` - Relay reconnection support
+- `lib/wallet/services/wallet_service.dart` - `initializeAdapter()` method
+- `lib/presentation/screens/onboarding/onboarding_loading_page.dart` - Restoration flow
+
+---
+
 ### 2025-12-12: Coinbase Wallet Native SDK & Reown AppKit Integration
 
 **Feature**: Migrated Coinbase Wallet integration to use native SDK and introduced Reown AppKit for unified WalletConnect handling.

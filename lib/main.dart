@@ -48,8 +48,45 @@ void main() async {
 }
 
 /// Main application widget
-class WalletIntegrationApp extends StatelessWidget {
+///
+/// Implements [WidgetsBindingObserver] to handle app lifecycle events.
+/// Forces UI redraw on app resume to fix black screen issue on certain devices.
+class WalletIntegrationApp extends StatefulWidget {
   const WalletIntegrationApp({super.key});
+
+  @override
+  State<WalletIntegrationApp> createState() => _WalletIntegrationAppState();
+}
+
+class _WalletIntegrationAppState extends State<WalletIntegrationApp>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // Force UI redraw on app resume to fix black screen issue
+      // This is needed for devices with Mali GPU (Samsung Galaxy A series)
+      // where Vulkan context may be lost during background/foreground transitions
+      AppLogger.d('💡 App resumed - Forcing UI redraw');
+      setState(() {});
+
+      // Additional frame callback for extra stability
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() {});
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

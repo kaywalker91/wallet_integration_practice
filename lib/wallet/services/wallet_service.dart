@@ -164,7 +164,54 @@ class WalletService {
 
     return adapter;
   }
-  
+
+  /// Initialize an adapter without creating a new connection.
+  ///
+  /// This is used during session restoration after cold start (Android process death).
+  /// It initializes the adapter (which restores session from storage and
+  /// attempts relay reconnection) but does NOT initiate a new connection flow.
+  ///
+  /// Returns the initialized adapter for further operations like [ensureRelayConnected].
+  Future<BaseWalletAdapter> initializeAdapter(WalletType walletType) async {
+    AppLogger.wallet('Initializing adapter only (no connection)', data: {
+      'type': walletType.name,
+    });
+
+    final adapter = await _getAdapter(walletType);
+    _activeAdapter = adapter;
+
+    // Subscribe to adapter's connection stream
+    await _adapterSubscription?.cancel();
+    _adapterSubscription = adapter.connectionStream.listen((status) {
+      _connectionController.add(status);
+      if (status.isConnected) {
+        _connectedWallet = status.wallet;
+      } else if (status.isDisconnected) {
+        _connectedWallet = null;
+      }
+    });
+
+    // Subscribe to accounts changed stream if WalletConnect adapter
+    await _accountsSubscription?.cancel();
+    if (adapter is WalletConnectAdapter) {
+      _accountsSubscription = adapter.accountsChangedStream.listen((accounts) {
+        _accountsChangedController.add(accounts);
+        AppLogger.wallet('Session accounts updated', data: {
+          'count': accounts.count,
+          'activeAddress': accounts.activeAddress,
+        });
+      });
+    }
+
+    AppLogger.wallet('Adapter initialized (restoration mode)', data: {
+      'type': walletType.name,
+      'isConnected': adapter.isConnected,
+      'hasAddress': adapter.connectedAddress != null,
+    });
+
+    return adapter;
+  }
+
   // _createAdapter method removed - logic moved to WalletAdapterFactory
 
   /// Connect to a wallet

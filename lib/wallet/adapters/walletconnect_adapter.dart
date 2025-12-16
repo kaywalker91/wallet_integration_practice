@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:reown_appkit/reown_appkit.dart';
 import 'package:wallet_integration_practice/core/core.dart';
@@ -40,6 +41,9 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
 
   /// Stream controller for account changes
   final _accountsChangedController = StreamController<SessionAccounts>.broadcast();
+
+  /// Track relay connection state for cold start recovery
+  bool _isRelayConnected = false;
 
   /// Whether the adapter is currently waiting for wallet approval
   /// Used by lifecycle observer to know when to check for session on resume
@@ -136,6 +140,16 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
     _appKit!.onSessionEvent.subscribe(_onSessionEvent);
     _appKit!.onSessionUpdate.subscribe(_onSessionUpdate);
 
+    // Subscribe to relay client events for connection state tracking
+    // This is critical for detecting relay disconnection after cold start
+    _appKit!.core.relayClient.onRelayClientConnect.subscribe(_onRelayConnect);
+    _appKit!.core.relayClient.onRelayClientDisconnect.subscribe(_onRelayDisconnect);
+    _appKit!.core.relayClient.onRelayClientError.subscribe(_onRelayError);
+
+    // Check initial relay state
+    _isRelayConnected = _appKit!.core.relayClient.isConnected;
+    AppLogger.wallet('Initial relay state', data: {'isConnected': _isRelayConnected});
+
     // Restore existing sessions
     await _restoreSession();
 
@@ -220,6 +234,106 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
     AppLogger.wallet('No session found after resume, continuing to wait');
   }
 
+  // ============================================================
+  // Relay Connection Management
+  // ============================================================
+
+  /// Handle relay client connect event
+  void _onRelayConnect(dynamic _) {
+    _isRelayConnected = true;
+    AppLogger.wallet('Relay client connected');
+  }
+
+  /// Handle relay client disconnect event
+  void _onRelayDisconnect(dynamic _) {
+    _isRelayConnected = false;
+    AppLogger.wallet('Relay client disconnected');
+  }
+
+  /// Handle relay client error event
+  void _onRelayError(dynamic event) {
+    AppLogger.wallet('Relay client error', data: {'error': event?.toString()});
+  }
+
+  /// Check if relay is currently connected
+  bool get isRelayConnected => _isRelayConnected;
+
+  /// Ensure relay is connected, attempting reconnection if needed.
+  ///
+  /// Returns true if relay is connected, false if reconnection failed.
+  ///
+  /// This is CRITICAL after cold start when the WebSocket connection
+  /// was lost due to Android process death. Without relay reconnection,
+  /// stored sessions appear valid but cannot communicate with the wallet.
+  Future<bool> ensureRelayConnected({
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
+    if (_appKit == null) {
+      AppLogger.wallet('Cannot reconnect relay: AppKit not initialized');
+      return false;
+    }
+
+    // Already connected
+    if (_isRelayConnected) {
+      AppLogger.wallet('Relay already connected');
+      return true;
+    }
+
+    AppLogger.wallet('Relay not connected, attempting reconnection...');
+
+    final completer = Completer<bool>();
+    Timer? timeoutTimer;
+
+    void onConnect(dynamic _) {
+      if (!completer.isCompleted) {
+        AppLogger.wallet('Relay reconnection successful');
+        completer.complete(true);
+        timeoutTimer?.cancel();
+      }
+    }
+
+    void onError(dynamic event) {
+      if (!completer.isCompleted) {
+        AppLogger.wallet('Relay reconnection error', data: {'error': event?.toString()});
+        // Don't complete on error - wait for timeout or success
+      }
+    }
+
+    // Subscribe to connection events for this reconnection attempt
+    _appKit!.core.relayClient.onRelayClientConnect.subscribe(onConnect);
+    _appKit!.core.relayClient.onRelayClientError.subscribe(onError);
+
+    try {
+      // Attempt to reconnect relay
+      await _appKit!.core.relayClient.connect();
+
+      // Set timeout for reconnection
+      timeoutTimer = Timer(timeout, () {
+        if (!completer.isCompleted) {
+          AppLogger.wallet('Relay reconnection timed out after ${timeout.inSeconds}s');
+          completer.complete(false);
+        }
+      });
+
+      return await completer.future;
+    } catch (e) {
+      AppLogger.wallet('Relay reconnection exception', data: {'error': e.toString()});
+      if (!completer.isCompleted) {
+        completer.complete(false);
+      }
+      return false;
+    } finally {
+      // Cleanup subscriptions for this attempt
+      _appKit!.core.relayClient.onRelayClientConnect.unsubscribe(onConnect);
+      _appKit!.core.relayClient.onRelayClientError.unsubscribe(onError);
+      timeoutTimer?.cancel();
+    }
+  }
+
+  // ============================================================
+  // Session Validation
+  // ============================================================
+
   /// Check if a session matches the expected wallet type.
   /// Subclasses should override this to filter sessions by wallet name.
   bool isSessionValid(SessionData session) {
@@ -228,24 +342,60 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
 
   Future<void> _restoreSession() async {
     final sessions = _appKit!.sessions.getAll();
-    
-    // Find the first session that matches our validation logic
+
+    if (sessions.isEmpty) {
+      AppLogger.wallet('No sessions to restore');
+      return;
+    }
+
+    AppLogger.wallet('Found ${sessions.length} stored sessions, checking relay...');
+
+    // CRITICAL: Ensure relay is connected before using stored sessions
+    // After cold start (Android process death), the WebSocket connection is dead
+    // even though session objects are restored from storage. Without relay
+    // reconnection, sessions appear valid but cannot communicate with the wallet,
+    // causing infinite approval loops.
+    final relayConnected = await ensureRelayConnected();
+
+    if (!relayConnected) {
+      AppLogger.wallet('Relay not connected, cannot restore sessions safely');
+      // Clear stale sessions to prevent infinite loop
+      // These sessions are useless without relay connectivity
+      for (final session in sessions) {
+        try {
+          AppLogger.wallet('Clearing stale session', data: {'topic': session.topic});
+          await _appKit!.disconnectSession(
+            topic: session.topic,
+            reason: ReownSignError(
+              code: 6000,
+              message: 'Session expired due to relay disconnection',
+            ),
+          );
+        } catch (e) {
+          AppLogger.wallet('Failed to clear stale session', data: {'error': e.toString()});
+        }
+      }
+      return;
+    }
+
+    // Relay is connected, proceed with session restoration
     for (final session in sessions) {
       if (isSessionValid(session)) {
         _session = session;
         _parseSessionAccounts();
         _emitConnectionStatus();
-        
-        AppLogger.wallet('Session restored', data: {
+
+        AppLogger.wallet('Session restored successfully', data: {
           'address': connectedAddress,
           'accountCount': _sessionAccounts.count,
           'topic': _session!.topic,
           'peerName': _session!.peer?.metadata.name,
+          'relayConnected': _isRelayConnected,
         });
         return; // Stop after finding the first valid session
       }
     }
-    
+
     if (sessions.isNotEmpty && _session == null) {
       AppLogger.wallet('Found ${sessions.length} sessions but none matched validation');
     }
@@ -771,10 +921,16 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
     // Remove lifecycle observer
     WidgetsBinding.instance.removeObserver(this);
 
+    // Unsubscribe from session events
     _appKit?.onSessionConnect.unsubscribe(_onSessionConnect);
     _appKit?.onSessionDelete.unsubscribe(_onSessionDelete);
     _appKit?.onSessionEvent.unsubscribe(_onSessionEvent);
     _appKit?.onSessionUpdate.unsubscribe(_onSessionUpdate);
+
+    // Unsubscribe from relay events
+    _appKit?.core.relayClient.onRelayClientConnect.unsubscribe(_onRelayConnect);
+    _appKit?.core.relayClient.onRelayClientDisconnect.unsubscribe(_onRelayDisconnect);
+    _appKit?.core.relayClient.onRelayClientError.unsubscribe(_onRelayError);
 
     await _connectionController.close();
     await _accountsChangedController.close();

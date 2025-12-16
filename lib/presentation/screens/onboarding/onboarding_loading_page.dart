@@ -10,6 +10,7 @@ import 'package:wallet_integration_practice/presentation/providers/wallet_provid
 import 'package:wallet_integration_practice/presentation/providers/chain_provider.dart';
 import 'package:wallet_integration_practice/presentation/screens/home/home_screen.dart';
 import 'package:wallet_integration_practice/presentation/screens/onboarding/rabby_guide_dialog.dart';
+import 'package:wallet_integration_practice/wallet/adapters/walletconnect_adapter.dart';
 
 /// Onboarding connection step
 enum OnboardingStep {
@@ -168,9 +169,10 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
   ///
   /// This is called when the app was killed while waiting for wallet approval,
   /// and the user returns from the wallet app. We need to:
-  /// 1. Re-initialize the wallet adapter
-  /// 2. Check if a session was already established
-  /// 3. If connected, proceed to home; otherwise, wait for session events
+  /// 1. Re-initialize the wallet adapter (which restores session from storage)
+  /// 2. Ensure relay WebSocket is connected (CRITICAL after cold start!)
+  /// 3. Check if the stored session is valid and usable
+  /// 4. If connected, proceed to home; otherwise, show error
   Future<void> _restoreAndCheckSession() async {
     AppLogger.i('[Onboarding] Restoring session for ${widget.walletType.name}...');
 
@@ -178,46 +180,101 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
       // First, listen to connection status stream for future events
       final alreadyConnected = _listenToConnectionStatus();
 
-      // If _listenToConnectionStatus already detected a connection, we're done
+      // If already connected (unlikely but possible), we're done
       if (alreadyConnected) {
         AppLogger.i('[Onboarding] Session already found during listen setup');
-        
-        // Ensure MultiWalletNotifier is aware of this restored connection
         final currentWallet = ref.read(walletServiceProvider).currentConnectionStatus.wallet;
         if (currentWallet != null) {
           ref.read(multiWalletNotifierProvider.notifier).registerWallet(currentWallet);
         }
-        
         return;
       }
 
-      // Re-connect to the wallet adapter to restore session
-      // This will check for existing WalletConnect sessions
-
-      // Get default chain from wallet type
-      final defaultChainId = widget.walletType.defaultChainId;
-      final defaultCluster = widget.walletType.defaultCluster;
-
-      // Update chain selection for balance display
-      final chain = SupportedChains.getByChainId(defaultChainId);
-      if (chain != null) {
-        ref.read(chainSelectionProvider.notifier).selectChain(chain);
+      // Update UI to show we're restoring
+      if (mounted) {
+        setState(() => _currentStep = OnboardingStep.verifying);
       }
 
-      // Try to restore/connect - this will check for existing sessions
-      await ref.read(multiWalletNotifierProvider.notifier).connectWallet(
-            walletType: widget.walletType,
-            chainId: defaultChainId,
-            cluster: defaultCluster,
-          );
+      // Get the wallet service
+      final walletService = ref.read(walletServiceProvider);
 
-      AppLogger.i('[Onboarding] Session restore initiated');
-    } catch (e) {
-      AppLogger.e('[Onboarding] Session restore error', e);
+      // Initialize adapter WITHOUT creating a new connection
+      // This restores the session from storage and attempts relay reconnection
+      AppLogger.i('[Onboarding] Initializing adapter for restoration...');
+      final adapter = await walletService.initializeAdapter(widget.walletType);
+
+      // CRITICAL: For WalletConnect adapters, verify relay is connected
+      // After cold start (Android process death), the WebSocket is dead
+      // even though session objects are restored from storage
+      if (adapter is WalletConnectAdapter) {
+        AppLogger.i('[Onboarding] Checking relay connection...');
+        final relayConnected = await adapter.ensureRelayConnected(
+          timeout: const Duration(seconds: 8),
+        );
+
+        if (!relayConnected) {
+          AppLogger.w('[Onboarding] Relay reconnection failed');
+
+          // Clear pending state since we can't restore
+          ref.read(pendingConnectionServiceProvider).clearPendingConnection();
+
+          if (mounted) {
+            setState(() {
+              _currentStep = OnboardingStep.error;
+              _errorMessage = '세션이 만료되었습니다. 지갑을 다시 연결해 주세요.';
+            });
+          }
+          return;
+        }
+
+        AppLogger.i('[Onboarding] Relay connected, checking session...');
+      }
+
+      // Check if we're now connected after relay reconnection
+      final status = walletService.currentConnectionStatus;
+      if (status.isConnected && status.wallet != null) {
+        AppLogger.i('[Onboarding] Session restored successfully!');
+
+        // Clear pending state
+        ref.read(pendingConnectionServiceProvider).clearPendingConnection();
+
+        // Register wallet
+        ref.read(multiWalletNotifierProvider.notifier).registerWallet(status.wallet!);
+
+        // Update chain selection for balance display
+        final defaultChainId = widget.walletType.defaultChainId;
+        final chain = SupportedChains.getByChainId(defaultChainId);
+        if (chain != null) {
+          ref.read(chainSelectionProvider.notifier).selectChain(chain);
+        }
+
+        // Show success briefly then navigate
+        if (mounted) {
+          setState(() => _currentStep = OnboardingStep.complete);
+          await Future.delayed(const Duration(milliseconds: 800));
+          _navigateToHome();
+        }
+        return;
+      }
+
+      // Session not found after relay reconnection - may have expired or was never established
+      AppLogger.w('[Onboarding] No valid session found after relay reconnection');
+      ref.read(pendingConnectionServiceProvider).clearPendingConnection();
+
       if (mounted) {
         setState(() {
           _currentStep = OnboardingStep.error;
-          _errorMessage = 'Failed to restore session: ${e.toString()}';
+          _errorMessage = '연결을 찾을 수 없습니다. 다시 연결을 시도해 주세요.';
+        });
+      }
+    } catch (e) {
+      AppLogger.e('[Onboarding] Session restore error', e);
+      ref.read(pendingConnectionServiceProvider).clearPendingConnection();
+
+      if (mounted) {
+        setState(() {
+          _currentStep = OnboardingStep.error;
+          _errorMessage = '세션 복원 실패: ${e.toString()}';
         });
       }
     }
