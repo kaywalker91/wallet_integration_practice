@@ -1,5 +1,4 @@
-/// Presentation module exports
-library presentation;
+// Presentation module exports
 
 // Providers
 export 'providers/wallet_provider.dart';

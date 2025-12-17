@@ -8,7 +8,6 @@ import 'package:wallet_integration_practice/wallet/adapters/rabby_wallet_adapter
 import 'package:wallet_integration_practice/wallet/adapters/trust_wallet_adapter.dart';
 import 'package:wallet_integration_practice/wallet/adapters/walletconnect_adapter.dart';
 import 'package:wallet_integration_practice/wallet/models/wallet_adapter_config.dart';
-import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
 
 import '../../core/constants/wallet_constants.dart';
 
@@ -41,6 +40,5 @@ class WalletAdapterFactory {
       case WalletType.rainbow:
         return WalletConnectAdapter(config: config);
     }
-    throw UnimplementedError('Adapter for ${type.name} not implemented');
   }
 }

@@ -1,7 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:pinenacl/api.dart';
 import 'package:pinenacl/tweetnacl.dart';
@@ -413,26 +411,6 @@ class PhantomAdapter extends SolanaWalletAdapter {
     }
 
     return result;
-  }
-
-  Future<void> _openAppStore() async {
-    try {
-      String storeUrl;
-      if (Platform.isIOS) {
-        storeUrl =
-            'https://apps.apple.com/app/id${WalletConstants.phantomAppStoreId}';
-      } else if (Platform.isAndroid) {
-        storeUrl =
-            'https://play.google.com/store/apps/details?id=${WalletConstants.phantomPackageAndroid}';
-      } else {
-        return;
-      }
-
-      final uri = Uri.parse(storeUrl);
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } catch (e) {
-      AppLogger.e('Error opening app store', e);
-    }
   }
 
   @override

@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 import 'package:reown_appkit/reown_appkit.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wallet_integration_practice/core/core.dart';
@@ -240,26 +239,6 @@ class TrustWalletAdapter extends WalletConnectAdapter {
         walletType: walletType.name,
         message: 'Failed to open Trust Wallet: ${e.toString()}',
       );
-    }
-  }
-
-  Future<void> _openAppStore() async {
-    try {
-      String storeUrl;
-      if (Platform.isIOS) {
-        storeUrl =
-            'https://apps.apple.com/app/id${WalletConstants.trustWalletAppStoreId}';
-      } else if (Platform.isAndroid) {
-        storeUrl =
-            'https://play.google.com/store/apps/details?id=${WalletConstants.trustWalletPackageAndroid}';
-      } else {
-        return;
-      }
-
-      final uri = Uri.parse(storeUrl);
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } catch (e) {
-      AppLogger.e('Error opening app store', e);
     }
   }
 

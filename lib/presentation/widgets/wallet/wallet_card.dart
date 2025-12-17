@@ -359,18 +359,6 @@ class WalletCard extends StatelessWidget {
       );
     }
   }
-
-  String _formatBalance(double value) {
-    if (value >= 1000000) {
-      return '${(value / 1000000).toStringAsFixed(2)}M';
-    } else if (value >= 1000) {
-      return '${(value / 1000).toStringAsFixed(2)}K';
-    } else if (value >= 1) {
-      return value.toStringAsFixed(4);
-    } else {
-      return value.toStringAsFixed(6);
-    }
-  }
 }
 
 class _AnimatedBalanceText extends StatelessWidget {

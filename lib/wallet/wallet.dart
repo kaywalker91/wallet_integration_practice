@@ -1,5 +1,4 @@
-/// Wallet module exports
-library wallet;
+// Wallet module exports
 
 // Models
 export 'models/wallet_adapter_config.dart';

@@ -4,7 +4,6 @@ import 'package:wallet_integration_practice/core/core.dart';
 import 'package:wallet_integration_practice/domain/entities/transaction_entity.dart';
 import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
 import 'package:wallet_integration_practice/presentation/providers/wallet_provider.dart';
-import 'package:wallet_integration_practice/presentation/providers/chain_provider.dart';
 import 'package:wallet_integration_practice/presentation/providers/balance_provider.dart';
 import 'package:wallet_integration_practice/presentation/screens/onboarding/onboarding_loading_page.dart';
 import 'package:wallet_integration_practice/presentation/widgets/wallet/wallet_card.dart';

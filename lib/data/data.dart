@@ -1,5 +1,4 @@
-/// Data module exports
-library data;
+// Data module exports
 
 // Models
 export 'models/wallet_model.dart';

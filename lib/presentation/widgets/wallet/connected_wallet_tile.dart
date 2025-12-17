@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:wallet_integration_practice/core/core.dart';
-import 'package:wallet_integration_practice/core/constants/chain_constants.dart';
 import 'package:wallet_integration_practice/domain/entities/connected_wallet_entry.dart';
 import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
 import 'package:wallet_integration_practice/presentation/providers/balance_provider.dart';

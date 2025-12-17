@@ -1,189 +1,189 @@
 # wallet_integration_practice
 
-Wallet Integration Practice for iLity Hub
+iLity Hub를 위한 지갑 연동 실습
 
-## Features
+## 기능
 
-- Multi-chain wallet support (EVM chains + Solana)
-- WalletConnect v2 integration
-- Deep link wallet connection flow
-- Supported wallets: MetaMask, Trust Wallet, Phantom, Rabby, OKX Wallet
+- 멀티체인 지갑 지원 (EVM 체인 + 솔라나)
+- WalletConnect v2 연동
+- 딥링크 지갑 연결 흐름
+- 지원되는 지갑: 메타마스크(MetaMask), 트러스트 월렛(Trust Wallet), 팬텀(Phantom), 래비(Rabby), OKX 월렛
 
-## Recent Changes
+## 최근 변경 사항
 
-### 2025-12-17: Comprehensive WalletConnect Stability & UX Improvements
+### 2025-12-17: 포괄적인 WalletConnect 안정성 및 UX 개선
 
-**Feature**: Major stability improvements for WalletConnect-based wallets (MetaMask, Trust Wallet, OKX) and UX fixes for Phantom Wallet.
+**기능**: WalletConnect 기반 지갑(메타마스크, 트러스트 월렛, OKX)의 주요 안정성 개선 및 팬텀 월렛의 UX 수정.
 
-**Key Improvements**:
-1.  **WalletConnect Stability**:
-    *   **Relay Reconnection**: Added robust "Watchdog" logic to detect and reconnect broken WebSocket relay connections when the app resumes from the background.
-    *   **Relay State Consistency**: Critical fix in `_onRelayError` to immediately mark relay as disconnected, preventing "zombie state" where the app falsely believes it's connected and fails to reconnect.
-    *   **Session Detection**: Implemented a dual-check system (event listener + polling) to ensure session approvals are captured even if the initial event is missed while the app is backgrounded.
-    *   **Conflict Resolution**: Added `clearPreviousSessions()` to wipe stale pairings before starting a new connection, preventing cross-wallet conflicts (e.g., Trust Wallet opening Phantom links).
+**주요 개선 사항**:
+1.  **WalletConnect 안정성**:
+    *   **릴레이(Relay) 재연결**: 앱이 백그라운드에서 다시 활성화될 때 끊어진 WebSocket 릴레이 연결을 감지하고 다시 연결하는 강력한 "Watchdog" 로직 추가.
+    *   **릴레이 상태 일관성**: `_onRelayError`에서 릴레이를 즉시 연결 끊김으로 표시하여, 앱이 잘못된 연결 상태로 인식하고 재연결에 실패하는 "좀비 상태"를 방지하는 중요한 수정 적용.
+    *   **세션 감지**: 앱이 백그라운드에 있는 동안 초기 이벤트를 놓치더라도 세션 승인을 캡처할 수 있도록 이중 확인 시스템(이벤트 리스너 + 폴링) 구현.
+    *   **충돌 해결**: 새로운 연결을 시작하기 전에 오래된 페어링을 지우는 `clearPreviousSessions()`를 추가하여 지갑 간 충돌 방지 (예: 트러스트 월렛이 팬텀 링크를 여는 문제).
 
-2.  **Wallet-Specific Updates**:
-    *   **MetaMask**: Refactored connection flow to `prepareConnection` pattern. Now generates the URI *before* attempting to open the app, ensuring a valid deep link is ready.
-    *   **Trust Wallet**:
-        *   Adopted `prepareConnection` pattern for reliable deep linking.
-        *   Added automatic clearing of previous sessions to prevent "phantom" redirects.
-        *   Improved URI generation reliability.
-    *   **Phantom Wallet**:
-        *   Fixed `disconnect` behavior to simply clear local state instead of launching a disconnect URL. This prevents the annoying browser redirect to `phantom.com` upon disconnection.
+2.  **지갑별 업데이트**:
+    *   **메타마스크(MetaMask)**: 연결 흐름을 `prepareConnection` 패턴으로 리팩토링. 이제 앱을 열기 *전*에 URI를 생성하여 유효한 딥링크가 준비되도록 보장.
+    *   **트러스트 월렛(Trust Wallet)**:
+        *   안정적인 딥링크를 위해 `prepareConnection` 패턴 채택.
+        *   "유령" 리다이렉트를 방지하기 위해 이전 세션 자동 삭제 기능 추가.
+        *   URI 생성 신뢰성 향상.
+    *   **팬텀 월렛(Phantom Wallet)**:
+        *   `disconnect` 동작을 수정하여 연결 해제 URL을 실행하는 대신 로컬 상태만 지우도록 변경. 이로써 연결 해제 시 `phantom.com`으로 리다이렉트되는 번거로운 브라우저 이동을 방지.
 
-**Files Changed**:
-- `lib/wallet/adapters/walletconnect_adapter.dart`: Core stability logic (Watchdog, Relay Reconnection).
-- `lib/wallet/adapters/metamask_adapter.dart`: Refactored to use `prepareConnection`.
-- `lib/wallet/adapters/trust_wallet_adapter.dart`: Refactored to use `prepareConnection` & session clearing.
-- `lib/wallet/adapters/phantom_adapter.dart`: Improved disconnect logic.
-- `lib/wallet/adapters/okx_wallet_adapter.dart`: Added relay checks.
+**변경된 파일**:
+- `lib/wallet/adapters/walletconnect_adapter.dart`: 핵심 안정성 로직 (Watchdog, 릴레이 재연결).
+- `lib/wallet/adapters/metamask_adapter.dart`: `prepareConnection`을 사용하도록 리팩토링.
+- `lib/wallet/adapters/trust_wallet_adapter.dart`: `prepareConnection` 및 세션 삭제를 사용하도록 리팩토링.
+- `lib/wallet/adapters/phantom_adapter.dart`: 연결 해제 로직 개선.
+- `lib/wallet/adapters/okx_wallet_adapter.dart`: 릴레이 확인 로직 추가.
 
 ---
 
-### 2025-12-16: Rabby Wallet UX & dApp URL Configuration
+### 2025-12-16: 래비(Rabby) 월렛 UX 및 dApp URL 설정
 
-**Feature**: Improved Rabby Wallet connection flow and updated dApp URL configuration.
+**기능**: 래비 월렛 연결 흐름 개선 및 dApp URL 설정 업데이트.
 
-**Changes**:
-- **Rabby Wallet**: Re-enabled dedicated guide dialog for Rabby Wallet users, as it requires a manual dApp browser connection flow instead of standard deep linking.
-- **UI Text**: Updated Rabby Wallet guide text to correctly refer to the "Dapps" tab instead of "Browser".
-- **Configuration**: Updated `dappUrl` to point to the active development environment for better integration testing.
+**변경 사항**:
+- **래비 월렛**: 래비 월렛은 표준 딥링크 대신 수동 dApp 브라우저 연결 흐름이 필요하므로 전용 가이드 다이얼로그를 다시 활성화.
+- **UI 텍스트**: 래비 월렛 가이드 텍스트를 "브라우저(Browser)" 대신 "Dapps" 탭을 참조하도록 수정.
+- **설정**: 더 나은 통합 테스트를 위해 `dappUrl`이 활성 개발 환경을 가리키도록 업데이트.
 
-**Files Changed**:
+**변경된 파일**:
 - `lib/core/constants/app_constants.dart`
 - `lib/presentation/screens/onboarding/onboarding_loading_page.dart`
 - `lib/presentation/screens/onboarding/rabby_guide_dialog.dart`
 
 ---
 
-### 2025-12-16: Trust Wallet Connection UX Improvement
+### 2025-12-16: 트러스트 월렛 연결 UX 개선
 
-**Problem**: Trust Wallet 연결 시 최종적으로 연결 성공하지만, 중간에 "연결 실패" 메시지가 일시적으로 표시되는 문제.
+**문제**: 트러스트 월렛 연결 시 최종적으로 연결 성공하지만, 중간에 "연결 실패" 메시지가 일시적으로 표시되는 문제.
 
-**Root Cause**: `_restoreAndCheckSession()` 메서드에서 relay 재연결 후 세션이 즉시 발견되지 않으면 에러 UI를 바로 표시. Trust Wallet은 세션 동기화가 느려서 500ms 대기 후에도 세션이 준비되지 않을 수 있지만, retry 로직이 작동하면 결국 연결됨.
+**원인**: `_restoreAndCheckSession()` 메서드에서 relay 재연결 후 세션이 즉시 발견되지 않으면 에러 UI를 바로 표시. Trust Wallet은 세션 동기화가 느려서 500ms 대기 후에도 세션이 준비되지 않을 수 있지만, retry 로직이 작동하면 결국 연결됨.
 
-**Solution**:
+**해결**:
 1. `_restoreAndCheckSession()`에서 즉시 에러 UI 표시 대신 "서명 검증 중" 상태 유지
 2. `clearPendingConnection()` 조기 호출 제거 → retry 로직이 계속 작동
 3. 기존 스트림 리스너가 최종 연결 성공/실패 처리하도록 위임
 
-**Expected Behavior**:
+**기대 동작**:
 - 연결 중: "서명 검증 중" 상태 유지
 - 연결 성공: 메인 화면으로 이동
 - 진짜 연결 실패: timeout 후 에러 표시
 
-**Files Changed**:
-- `lib/presentation/screens/onboarding/onboarding_loading_page.dart` - Removed premature error UI display
+**변경된 파일**:
+- `lib/presentation/screens/onboarding/onboarding_loading_page.dart` - 성급한 에러 UI 표시 제거
 
 ---
 
-### 2025-12-16: OKX Wallet Connection Stability Fixes
+### 2025-12-16: OKX 월렛 연결 안정성 수정
 
-**Problem 1**: OKX Wallet connection infinite approval loop after app cold start.
+**문제 1**: 앱 콜드 스타트 후 OKX 월렛 연결 시 무한 승인 루프 발생.
 
-**Root Cause**: When Android kills the app process while user is in OKX Wallet, the WalletConnect WebSocket relay connection is lost but session objects persist in storage, causing a mismatch.
+**원인**: 사용자가 OKX 월렛에 있는 동안 Android가 앱 프로세스를 종료하면 WalletConnect WebSocket 릴레이 연결은 끊어지지만 세션 객체는 저장소에 유지되어 불일치 발생.
 
-**Solution**:
-1. Added relay state tracking and `ensureRelayConnected()` method in `WalletConnectAdapter`
-2. Modified `_restoreSession()` to verify relay connection before restoring sessions
-3. Added `initializeAdapter()` method in `WalletService` for restoration without new connection
-4. Updated `OnboardingLoadingPage` to use relay reconnection flow
+**해결**:
+1. `WalletConnectAdapter`에 릴레이 상태 추적 및 `ensureRelayConnected()` 메서드 추가
+2. 세션을 복원하기 전에 릴레이 연결을 확인하도록 `_restoreSession()` 수정
+3. 새로운 연결 없이 복원을 위해 `WalletService`에 `initializeAdapter()` 메서드 추가
+4. `OnboardingLoadingPage`가 릴레이 재연결 흐름을 사용하도록 업데이트
 
-**Problem 2**: Black screen after returning from OKX Wallet on Samsung Galaxy devices.
+**문제 2**: 삼성 갤럭시 기기에서 OKX 월렛에서 복귀 후 검은 화면 발생.
 
-**Root Cause**: Impeller (Vulkan) rendering engine compatibility issue with Mali GPU. Surface recreation fails on app resume.
+**원인**: Mali GPU와 Impeller(Vulkan) 렌더링 엔진의 호환성 문제. 앱 재개 시 Surface 재생성 실패.
 
-**Solution**:
-1. Disabled Impeller rendering engine (fallback to Skia/OpenGL)
-2. Changed `launchMode` from `singleTop` to `singleTask` for stable Activity reuse
-3. Added app-level `WidgetsBindingObserver` for forced UI redraw on resume
+**해결**:
+1. Impeller 렌더링 엔진 비활성화 (Skia/OpenGL로 대체)
+2. 안정적인 액티비티 재사용을 위해 `launchMode`를 `singleTop`에서 `singleTask`로 변경
+3. 재개 시 강제 UI 다시 그리기를 위해 앱 수준 `WidgetsBindingObserver` 추가
 
-**Files Changed**:
-- `android/app/src/main/AndroidManifest.xml` - Impeller disable, launchMode change
-- `lib/main.dart` - Added lifecycle observer for UI redraw
-- `lib/wallet/adapters/walletconnect_adapter.dart` - Relay reconnection support
-- `lib/wallet/services/wallet_service.dart` - `initializeAdapter()` method
-- `lib/presentation/screens/onboarding/onboarding_loading_page.dart` - Restoration flow
+**변경된 파일**:
+- `android/app/src/main/AndroidManifest.xml` - Impeller 비활성화, launchMode 변경
+- `lib/main.dart` - UI 다시 그리기를 위한 라이프사이클 옵저버 추가
+- `lib/wallet/adapters/walletconnect_adapter.dart` - 릴레이 재연결 지원
+- `lib/wallet/services/wallet_service.dart` - `initializeAdapter()` 메서드
+- `lib/presentation/screens/onboarding/onboarding_loading_page.dart` - 복원 흐름
 
 ---
 
-### 2025-12-12: Coinbase Wallet Native SDK & Reown AppKit Integration
+### 2025-12-12: 코인베이스(Coinbase) 월렛 네이티브 SDK 및 Reown AppKit 통합
 
-**Feature**: Migrated Coinbase Wallet integration to use native SDK and introduced Reown AppKit for unified WalletConnect handling.
+**기능**: 코인베이스 월렛 통합을 네이티브 SDK 사용으로 마이그레이션하고 통합된 WalletConnect 처리를 위해 Reown AppKit 도입.
 
-**Changes**:
-- **Coinbase Wallet**: Switched from generic WalletConnect to `coinbase_wallet_sdk` for better native experience on Android/iOS.
-- **Reown AppKit**: Added `ReownAppKitService` to manage WalletConnect sessions, replacing custom implementation for better reliability and feature set.
-- **Configuration**: Updated `AndroidManifest.xml` with required package visibility queries and deep link schemes for Coinbase Wallet.
+**변경 사항**:
+- **코인베이스 월렛**: Android/iOS에서 더 나은 네이티브 경험을 위해 일반 WalletConnect에서 `coinbase_wallet_sdk`로 전환.
+- **Reown AppKit**: 더 나은 신뢰성과 기능 세트를 위해 커스텀 구현을 대체하여 WalletConnect 세션을 관리하는 `ReownAppKitService` 추가.
+- **설정**: 코인베이스 월렛에 필요한 패키지 가시성 쿼리 및 딥링크 스킴으로 `AndroidManifest.xml` 업데이트.
 
-**Files Changed**:
+**변경된 파일**:
 - `lib/wallet/adapters/coinbase_wallet_adapter.dart`
-- `lib/wallet/services/reown_appkit_service.dart` (New)
+- `lib/wallet/services/reown_appkit_service.dart` (신규)
 - `android/app/src/main/AndroidManifest.xml`
 - `pubspec.yaml`
 
-### 2025-12-10: Fix infinite loading on wallet return
+### 2025-12-10: 지갑 복귀 시 무한 로딩 수정
 
-**Problem**: After approving connection in OKX Wallet and returning to the app, the onboarding screen would show infinite loading.
+**문제**: OKX 월렛에서 연결 승인 후 앱으로 돌아오면 온보딩 화면에서 무한 로딩이 표시됨.
 
-**Root Cause**:
-- WalletConnect session events were emitted while the app was in background
-- When the app resumed, the stream subscription had already missed the connection event
-- The UI waited indefinitely for a stream event that would never come
+**원인**:
+- 앱이 백그라운드에 있는 동안 WalletConnect 세션 이벤트가 발생함
+- 앱이 재개되었을 때 스트림 구독은 이미 연결 이벤트를 놓친 상태임
+- UI는 오지 않을 스트림 이벤트를 무기한 기다림
 
-**Solution**:
-1. Added `currentConnectionStatus` getter to `WalletService` for synchronous status check
-2. Modified `OnboardingLoadingPage` to check current connection status **before** subscribing to stream
-3. Added `_restoreAndCheckSession()` for cold start recovery scenarios
+**해결**:
+1. 동기 상태 확인을 위해 `WalletService`에 `currentConnectionStatus` 게터 추가
+2. 스트림을 구독하기 **전**에 현재 연결 상태를 확인하도록 `OnboardingLoadingPage` 수정
+3. 콜드 스타트 복구 시나리오를 위해 `_restoreAndCheckSession()` 추가
 
-**Files Changed**:
-- `lib/wallet/services/wallet_service.dart` - Added `currentConnectionStatus` getter
-- `lib/presentation/screens/onboarding/onboarding_loading_page.dart` - Immediate status check + restore logic
+**변경된 파일**:
+- `lib/wallet/services/wallet_service.dart` - `currentConnectionStatus` 게터 추가
+- `lib/presentation/screens/onboarding/onboarding_loading_page.dart` - 즉시 상태 확인 + 복원 로직
 
-## Getting Started
+## 시작하기
 
-### Prerequisites
+### 전제 조건
 - Flutter 3.x
 - Dart 3.x
 
-### Installation
+### 설치
 
 ```bash
-# Get dependencies
+# 의존성 가져오기
 flutter pub get
 
-# Run code generation
+# 코드 생성 실행
 dart run build_runner build --delete-conflicting-outputs
 
-# Run the app
+# 앱 실행
 flutter run
 ```
 
-### Build
+### 빌드
 
 ```bash
-# Debug APK
+# 디버그 APK
 flutter build apk --debug
 
-# Release APK
+# 릴리스 APK
 flutter build apk --release
 ```
 
-## Architecture
+## 아키텍처
 
-Clean Architecture with the following layers:
+다음 계층으로 구성된 클린 아키텍처:
 
 ```
 lib/
-├── core/          # Shared utilities, constants, errors, services
-├── data/          # Data layer (models, datasources)
-├── domain/        # Business logic (entities, repositories, usecases)
-├── wallet/        # Wallet integration layer (adapters, services)
-└── presentation/  # UI layer (screens, widgets, providers)
+├── core/          # 공유 유틸리티, 상수, 에러, 서비스
+├── data/          # 데이터 계층 (모델, 데이터소스)
+├── domain/        # 비즈니스 로직 (엔티티, 레포지토리, 유스케이스)
+├── wallet/        # 지갑 연동 계층 (어댑터, 서비스)
+└── presentation/  # UI 계층 (화면, 위젯, 프로바이더)
 ```
 
-## Resources
+## 참고 자료
 
-- [Flutter Documentation](https://docs.flutter.dev/)
-- [WalletConnect v2 Docs](https://docs.walletconnect.com/)
+- [Flutter 문서](https://docs.flutter.dev/)
+- [WalletConnect v2 문서](https://docs.walletconnect.com/)
 - [Reown AppKit](https://docs.reown.com/)

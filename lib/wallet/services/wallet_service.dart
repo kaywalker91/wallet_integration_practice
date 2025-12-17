@@ -1,18 +1,11 @@
 import 'dart:async';
 import 'package:wallet_integration_practice/core/core.dart';
-import 'package:wallet_integration_practice/core/services/deep_link_service.dart';
 import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
 import 'package:wallet_integration_practice/domain/entities/transaction_entity.dart';
 import 'package:wallet_integration_practice/domain/entities/session_account.dart';
 import 'package:wallet_integration_practice/wallet/adapters/base_wallet_adapter.dart';
 import 'package:wallet_integration_practice/wallet/adapters/walletconnect_adapter.dart';
-import 'package:wallet_integration_practice/wallet/adapters/metamask_adapter.dart';
 import 'package:wallet_integration_practice/wallet/adapters/phantom_adapter.dart';
-import 'package:wallet_integration_practice/wallet/adapters/trust_wallet_adapter.dart';
-import 'package:wallet_integration_practice/wallet/adapters/rabby_wallet_adapter.dart';
-import 'package:wallet_integration_practice/wallet/adapters/generic_wallet_connect_adapter.dart';
-import 'package:wallet_integration_practice/wallet/adapters/coinbase_wallet_adapter.dart';
-import 'package:wallet_integration_practice/wallet/adapters/okx_wallet_adapter.dart';
 import 'package:wallet_integration_practice/wallet/models/wallet_adapter_config.dart';
 import 'package:wallet_integration_practice/wallet/services/wallet_adapter_factory.dart';
 

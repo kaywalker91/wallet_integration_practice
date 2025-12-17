@@ -728,27 +728,6 @@ class OkxWalletAdapter extends WalletConnectAdapter {
     });
   }
 
-  Future<void> _openAppStore() async {
-    try {
-      String storeUrl;
-      if (Platform.isIOS) {
-        storeUrl =
-            'https://apps.apple.com/app/id${WalletConstants.okxWalletAppStoreId}';
-      } else if (Platform.isAndroid) {
-        storeUrl =
-            'https://play.google.com/store/apps/details?id=${WalletConstants.okxWalletPackageAndroid}';
-      } else {
-        return;
-      }
-
-      AppLogger.wallet('Opening app store', data: {'url': storeUrl});
-      final uri = Uri.parse(storeUrl);
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } catch (e) {
-      AppLogger.e('Error opening app store', e);
-    }
-  }
-
   /// Wait for URI to be generated with polling
   Future<String?> _waitForUri({
     Duration timeout = const Duration(seconds: 5),

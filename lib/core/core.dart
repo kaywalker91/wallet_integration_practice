@@ -1,5 +1,4 @@
-/// Core module exports
-library core;
+// Core module exports
 
 // Constants
 export 'constants/app_constants.dart';

@@ -24,7 +24,6 @@ class WalletConnectModal extends ConsumerStatefulWidget {
 class _WalletConnectModalState extends ConsumerState<WalletConnectModal> {
   String? _uri;
   Timer? _poller;
-  bool _isConnecting = true;
   String? _errorMessage;
 
   @override
@@ -60,7 +59,6 @@ class _WalletConnectModalState extends ConsumerState<WalletConnectModal> {
       }).catchError((e) {
         if (mounted) {
           setState(() {
-            _isConnecting = false;
             _errorMessage = e.toString();
           });
         }
@@ -72,7 +70,6 @@ class _WalletConnectModalState extends ConsumerState<WalletConnectModal> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _isConnecting = false;
           _errorMessage = e.toString();
         });
       }
@@ -99,7 +96,6 @@ class _WalletConnectModalState extends ConsumerState<WalletConnectModal> {
       if (uri != null && uri != _uri) {
         setState(() {
           _uri = uri;
-          _isConnecting = false; // We have a URI, so we are "ready" to show QR
         });
       }
     });
@@ -182,7 +178,6 @@ class _WalletConnectModalState extends ConsumerState<WalletConnectModal> {
           onPressed: () {
             setState(() {
               _errorMessage = null;
-              _isConnecting = true;
             });
             _initialize();
           },

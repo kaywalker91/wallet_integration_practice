@@ -1,5 +1,4 @@
 import 'dart:async' show Completer, StreamSubscription, unawaited;
-import 'dart:io';
 import 'package:reown_appkit/reown_appkit.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wallet_integration_practice/core/core.dart';
@@ -188,27 +187,6 @@ class RabbyWalletAdapter extends WalletConnectAdapter {
       walletType: walletType.name,
       message: 'Rabby Wallet is not installed or does not support deep linking',
     );
-  }
-
-  Future<void> _openAppStore() async {
-    try {
-      String storeUrl;
-      if (Platform.isIOS) {
-        storeUrl =
-            'https://apps.apple.com/app/id${WalletConstants.rabbyAppStoreId}';
-      } else if (Platform.isAndroid) {
-        storeUrl =
-            'https://play.google.com/store/apps/details?id=${WalletConstants.rabbyPackageAndroid}';
-      } else {
-        return;
-      }
-
-      AppLogger.wallet('Opening app store', data: {'url': storeUrl});
-      final uri = Uri.parse(storeUrl);
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } catch (e) {
-      AppLogger.e('Error opening app store', e);
-    }
   }
 
   /// Wait for URI to be generated with polling

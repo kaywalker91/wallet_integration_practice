@@ -1,5 +1,4 @@
-/// Domain module exports
-library domain;
+// Domain module exports
 
 // Entities
 export 'entities/wallet_entity.dart';
