@@ -285,6 +285,10 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
   ///
   /// When an error occurs while waiting for wallet approval, we schedule
   /// an automatic reconnection attempt to recover the connection.
+  ///
+  /// CRITICAL: This handler MUST update _isRelayConnected to false immediately.
+  /// Without this, ensureRelayConnected() will return true based on stale cached state,
+  /// preventing reconnection attempts and causing session sync failures.
   void _onRelayError(dynamic event) {
     // Extract detailed error information if available
     String errorMessage = 'Unknown error';
@@ -300,7 +304,12 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
       'error': errorMessage,
       'isWaitingForApproval': _isWaitingForApproval,
       'isReconnecting': _isReconnecting,
+      'wasRelayConnected': _isRelayConnected,
     });
+
+    // CRITICAL FIX: Update relay state immediately on error
+    // This prevents "zombie state" where cached state is true but relay is disconnected
+    _isRelayConnected = false;
 
     // If we're waiting for wallet approval, schedule reconnection
     if (_isWaitingForApproval && !_isReconnecting) {

@@ -18,6 +18,7 @@ Wallet Integration Practice for iLity Hub
 **Key Improvements**:
 1.  **WalletConnect Stability**:
     *   **Relay Reconnection**: Added robust "Watchdog" logic to detect and reconnect broken WebSocket relay connections when the app resumes from the background.
+    *   **Relay State Consistency**: Critical fix in `_onRelayError` to immediately mark relay as disconnected, preventing "zombie state" where the app falsely believes it's connected and fails to reconnect.
     *   **Session Detection**: Implemented a dual-check system (event listener + polling) to ensure session approvals are captured even if the initial event is missed while the app is backgrounded.
     *   **Conflict Resolution**: Added `clearPreviousSessions()` to wipe stale pairings before starting a new connection, preventing cross-wallet conflicts (e.g., Trust Wallet opening Phantom links).
 
