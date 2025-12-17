@@ -66,6 +66,10 @@ class TrustWalletAdapter extends WalletConnectAdapter {
   /// This is called when Trust Wallet sends a deep link callback after
   /// user approves the connection. We check for session establishment
   /// and clear the approval flag to prevent infinite loops.
+  ///
+  /// CRITICAL: Trust Wallet uses WalletConnect relay for session data,
+  /// not deep link parameters. If the relay WebSocket disconnected while
+  /// we were in background, we must reconnect before checking for session.
   Future<void> _handleTrustCallback(Uri uri) async {
     // Guard: Skip if already connected (prevents infinite loop)
     if (isConnected) {
@@ -85,12 +89,24 @@ class TrustWalletAdapter extends WalletConnectAdapter {
       AppLogger.wallet('Trust Wallet callback received', data: {
         'uri': uri.toString(),
         'isWaitingForApproval': isWaitingForApproval,
+        'isRelayConnected': isRelayConnected,
       });
 
-      // CRITICAL: Delay to allow relay server to propagate session
+      // CRITICAL: Ensure relay is connected before checking session
+      // Trust Wallet sends session approval via relay server, not deep link
+      // The relay may have disconnected while app was in background
+      final relayReady = await ensureRelayConnected(
+        timeout: const Duration(seconds: 3),
+      );
+
+      AppLogger.wallet('Trust callback: Relay reconnection result', data: {
+        'relayReady': relayReady,
+      });
+
+      // Increased delay to allow relay server to propagate session
       // Trust Wallet may send callback before session is fully synced
-      // This matches the pattern used in OKX Wallet adapter
-      await Future.delayed(const Duration(milliseconds: 200));
+      // 500ms provides more buffer than the original 200ms
+      await Future.delayed(const Duration(milliseconds: 500));
 
       // Directly call the protected method instead of lifecycle callback
       // This prevents duplicate triggers from lifecycle events
@@ -197,6 +213,11 @@ class TrustWalletAdapter extends WalletConnectAdapter {
       final encodedUri = Uri.encodeComponent(wcUri);
       final deepLink = 'trust://wc?uri=$encodedUri';
 
+      AppLogger.wallet('Launching Trust Wallet deep link', data: {
+        'rawUri': wcUri.substring(0, wcUri.length.clamp(0, 50)),
+        'transformedUri': deepLink.substring(0, deepLink.length.clamp(0, 80)),
+      });
+
       final uri = Uri.parse(deepLink);
       final launched = await launchUrl(
         uri,
@@ -244,57 +265,54 @@ class TrustWalletAdapter extends WalletConnectAdapter {
 
   @override
   Future<WalletEntity> connect({int? chainId, String? cluster}) async {
-    // First, get the WalletConnect URI
+    // Ensure adapter is initialized
     await initialize();
 
-    // Start the connection process
-    final completer = Completer<WalletEntity>();
+    // Register deep link handlers for callback
+    _registerDeepLinkHandlers();
 
-    // Subscribe to connection stream
-    final subscription = connectionStream.listen((status) {
-      if (status.isConnected && status.wallet != null) {
-        if (!completer.isCompleted) {
-          completer.complete(status.wallet!.copyWith(type: walletType));
-        }
-      } else if (status.hasError) {
-        if (!completer.isCompleted) {
-          completer.completeError(
-            WalletException(
-              message: status.errorMessage ?? 'Connection failed',
-              code: 'CONNECTION_ERROR',
-            ),
-          );
-        }
-      }
-    });
+    // CRITICAL: Clear any previous WalletConnect sessions/pairings before connecting.
+    // This prevents issues where stale session data from a previous wallet (e.g., Phantom)
+    // could interfere with the Trust Wallet connection or cause phantom.com redirects.
+    AppLogger.wallet('Trust Wallet: clearing previous sessions before connect');
+    await clearPreviousSessions();
 
     try {
-      // Generate connection URI via parent class
-      super.connect(chainId: chainId, cluster: cluster);
+      // Step 1: Prepare connection (generates URI without blocking on approval)
+      final sessionFuture = await prepareConnection(chainId: chainId);
 
-      // Wait a moment for URI to be generated
-      await Future.delayed(const Duration(milliseconds: 500));
-
+      // Step 2: Get the generated URI
       final uri = await getConnectionUri();
-      if (uri != null) {
-        // Open Trust Wallet with the URI
-        await openWithUri(uri);
+      if (uri == null) {
+        throw const WalletException(
+          message: 'Failed to generate WalletConnect URI for Trust Wallet',
+          code: 'URI_GENERATION_FAILED',
+        );
       }
 
-      // Wait for connection with timeout
-      final wallet = await completer.future.timeout(
+      AppLogger.wallet('Trust Wallet: WC URI generated, opening wallet app', data: {
+        'wcUri': uri.substring(0, uri.length.clamp(0, 50)),
+      });
+
+      // Step 3: Open Trust Wallet with the URI (trust://wc?uri=...)
+      await openWithUri(uri);
+
+      // Step 4: Wait for session approval with timeout
+      final wallet = await sessionFuture.timeout(
         AppConstants.connectionTimeout,
         onTimeout: () {
-          throw WalletException(
-            message: 'Connection timed out',
+          throw const WalletException(
+            message: 'Connection timed out waiting for Trust Wallet approval',
             code: 'TIMEOUT',
           );
         },
       );
 
-      return wallet;
-    } finally {
-      await subscription.cancel();
+      // Return wallet with correct type
+      return wallet.copyWith(type: walletType);
+    } catch (e) {
+      AppLogger.e('Trust Wallet connection error', e);
+      rethrow;
     }
   }
 }

@@ -439,22 +439,23 @@ class PhantomAdapter extends SolanaWalletAdapter {
   Future<void> disconnect() async {
     if (!isConnected) return;
 
-    try {
-      // Build disconnect URL
-      final disconnectUrl = '${WalletConstants.phantomConnectUrl}/disconnect'
-          '?session=${Uri.encodeComponent(_session ?? '')}';
+    // NOTE: We intentionally do NOT launch the Phantom disconnect URL here.
+    // The disconnect URL (https://phantom.app/ul/v1/disconnect) opens a browser,
+    // which can cause confusion when switching to another wallet like Trust Wallet.
+    // The browser redirect to phantom.com was causing issues.
+    // Instead, we just clear the local state. Phantom will handle session
+    // cleanup on its side when a new connection is attempted.
+    AppLogger.wallet('Phantom disconnect: clearing local state', data: {
+      'hadSession': _session != null,
+      'hadAddress': _connectedAddress != null,
+    });
 
-      await launchUrl(
-        Uri.parse(disconnectUrl),
-        mode: LaunchMode.externalApplication,
-      );
-    } catch (e) {
-      AppLogger.e('Error disconnecting from Phantom', e);
-    } finally {
-      _connectedAddress = null;
-      _session = null;
-      _connectionController.add(WalletConnectionStatus.disconnected());
-    }
+    _connectedAddress = null;
+    _session = null;
+    _phantomPublicKey = null;
+    _connectionController.add(WalletConnectionStatus.disconnected());
+
+    AppLogger.wallet('Phantom disconnected (local state cleared)');
   }
 
   @override

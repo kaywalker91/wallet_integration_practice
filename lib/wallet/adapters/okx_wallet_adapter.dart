@@ -81,6 +81,10 @@ class OkxWalletAdapter extends WalletConnectAdapter {
   /// This is called when OKX Wallet sends a deep link callback after
   /// user approves the connection. We check for session establishment
   /// and clear the approval flag to prevent infinite loops.
+  ///
+  /// CRITICAL: OKX Wallet uses WalletConnect relay for session data,
+  /// not deep link parameters. If the relay WebSocket disconnected while
+  /// we were in background, we must reconnect before checking for session.
   Future<void> _handleOkxCallback(Uri uri) async {
     // Guard: Skip if already connected (prevents infinite loop)
     if (isConnected) {
@@ -100,10 +104,23 @@ class OkxWalletAdapter extends WalletConnectAdapter {
       AppLogger.wallet('OKX callback received', data: {
         'uri': uri.toString(),
         'isWaitingForApproval': isWaitingForApproval,
+        'isRelayConnected': isRelayConnected,
       });
 
-      // Small delay to allow relay server to propagate session
-      await Future.delayed(const Duration(milliseconds: 200));
+      // CRITICAL: Ensure relay is connected before checking session
+      // OKX Wallet sends session approval via relay server, not deep link
+      // The relay may have disconnected while app was in background
+      final relayReady = await ensureRelayConnected(
+        timeout: const Duration(seconds: 3),
+      );
+
+      AppLogger.wallet('OKX callback: Relay reconnection result', data: {
+        'relayReady': relayReady,
+      });
+
+      // Increased delay to allow relay server to propagate session
+      // 500ms provides more buffer than the original 200ms
+      await Future.delayed(const Duration(milliseconds: 500));
 
       // Directly call the protected method instead of lifecycle callback
       // This prevents duplicate triggers from lifecycle events
@@ -117,6 +134,9 @@ class OkxWalletAdapter extends WalletConnectAdapter {
   ///
   /// This is called when the app returns from background without
   /// specific callback data from OKX Wallet.
+  ///
+  /// CRITICAL: Same relay reconnection logic applies here since
+  /// the WebSocket may have disconnected while app was in background.
   Future<void> _handleAppResumed(Uri uri) async {
     // Guard: Skip if already connected (prevents infinite loop)
     if (isConnected) {
@@ -135,10 +155,21 @@ class OkxWalletAdapter extends WalletConnectAdapter {
     try {
       AppLogger.wallet('App resumed callback (OKX adapter)', data: {
         'isWaitingForApproval': isWaitingForApproval,
+        'isRelayConnected': isRelayConnected,
       });
 
-      // Slightly longer delay for generic resume to allow relay to sync
-      await Future.delayed(const Duration(milliseconds: 300));
+      // CRITICAL: Ensure relay is connected before checking session
+      final relayReady = await ensureRelayConnected(
+        timeout: const Duration(seconds: 3),
+      );
+
+      AppLogger.wallet('App resumed: Relay reconnection result', data: {
+        'relayReady': relayReady,
+      });
+
+      // Increased delay for generic resume to allow relay to sync
+      // 500ms provides more buffer than the original 300ms
+      await Future.delayed(const Duration(milliseconds: 500));
 
       // Directly call the protected method instead of lifecycle callback
       await checkConnectionOnResume();

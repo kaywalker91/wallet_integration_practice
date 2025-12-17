@@ -113,57 +113,45 @@ class MetaMaskAdapter extends WalletConnectAdapter {
 
   @override
   Future<WalletEntity> connect({int? chainId, String? cluster}) async {
-    // First, get the WalletConnect URI
+    // Ensure adapter is initialized
     await initialize();
 
-    // Start the connection process
-    final completer = Completer<WalletEntity>();
-
-    // Subscribe to connection stream
-    final subscription = connectionStream.listen((status) {
-      if (status.isConnected && status.wallet != null) {
-        if (!completer.isCompleted) {
-          completer.complete(status.wallet!.copyWith(type: walletType));
-        }
-      } else if (status.hasError) {
-        if (!completer.isCompleted) {
-          completer.completeError(
-            WalletException(
-              message: status.errorMessage ?? 'Connection failed',
-              code: 'CONNECTION_ERROR',
-            ),
-          );
-        }
-      }
-    });
-
     try {
-      // Generate connection URI via parent class
-      super.connect(chainId: chainId, cluster: cluster);
+      // Step 1: Prepare connection (generates URI without blocking on approval)
+      final sessionFuture = await prepareConnection(chainId: chainId);
 
-      // Wait a moment for URI to be generated
-      await Future.delayed(const Duration(milliseconds: 500));
-
+      // Step 2: Get the generated URI
       final uri = await getConnectionUri();
-      if (uri != null) {
-        // Open MetaMask with the URI
-        await openWithUri(uri);
+      if (uri == null) {
+        throw const WalletException(
+          message: 'Failed to generate WalletConnect URI for MetaMask',
+          code: 'URI_GENERATION_FAILED',
+        );
       }
 
-      // Wait for connection with timeout
-      final wallet = await completer.future.timeout(
+      AppLogger.wallet('Opening MetaMask with URI', data: {
+        'uri': uri.substring(0, uri.length.clamp(0, 50)),
+      });
+
+      // Step 3: Open MetaMask with the URI
+      await openWithUri(uri);
+
+      // Step 4: Wait for session approval with timeout
+      final wallet = await sessionFuture.timeout(
         AppConstants.connectionTimeout,
         onTimeout: () {
-          throw WalletException(
-            message: 'Connection timed out',
+          throw const WalletException(
+            message: 'Connection timed out waiting for MetaMask approval',
             code: 'TIMEOUT',
           );
         },
       );
 
-      return wallet;
-    } finally {
-      await subscription.cancel();
+      // Return wallet with correct type
+      return wallet.copyWith(type: walletType);
+    } catch (e) {
+      AppLogger.e('MetaMask connection error', e);
+      rethrow;
     }
   }
 }

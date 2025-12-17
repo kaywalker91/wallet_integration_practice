@@ -11,6 +11,34 @@ Wallet Integration Practice for iLity Hub
 
 ## Recent Changes
 
+### 2025-12-17: Comprehensive WalletConnect Stability & UX Improvements
+
+**Feature**: Major stability improvements for WalletConnect-based wallets (MetaMask, Trust Wallet, OKX) and UX fixes for Phantom Wallet.
+
+**Key Improvements**:
+1.  **WalletConnect Stability**:
+    *   **Relay Reconnection**: Added robust "Watchdog" logic to detect and reconnect broken WebSocket relay connections when the app resumes from the background.
+    *   **Session Detection**: Implemented a dual-check system (event listener + polling) to ensure session approvals are captured even if the initial event is missed while the app is backgrounded.
+    *   **Conflict Resolution**: Added `clearPreviousSessions()` to wipe stale pairings before starting a new connection, preventing cross-wallet conflicts (e.g., Trust Wallet opening Phantom links).
+
+2.  **Wallet-Specific Updates**:
+    *   **MetaMask**: Refactored connection flow to `prepareConnection` pattern. Now generates the URI *before* attempting to open the app, ensuring a valid deep link is ready.
+    *   **Trust Wallet**:
+        *   Adopted `prepareConnection` pattern for reliable deep linking.
+        *   Added automatic clearing of previous sessions to prevent "phantom" redirects.
+        *   Improved URI generation reliability.
+    *   **Phantom Wallet**:
+        *   Fixed `disconnect` behavior to simply clear local state instead of launching a disconnect URL. This prevents the annoying browser redirect to `phantom.com` upon disconnection.
+
+**Files Changed**:
+- `lib/wallet/adapters/walletconnect_adapter.dart`: Core stability logic (Watchdog, Relay Reconnection).
+- `lib/wallet/adapters/metamask_adapter.dart`: Refactored to use `prepareConnection`.
+- `lib/wallet/adapters/trust_wallet_adapter.dart`: Refactored to use `prepareConnection` & session clearing.
+- `lib/wallet/adapters/phantom_adapter.dart`: Improved disconnect logic.
+- `lib/wallet/adapters/okx_wallet_adapter.dart`: Added relay checks.
+
+---
+
 ### 2025-12-16: Rabby Wallet UX & dApp URL Configuration
 
 **Feature**: Improved Rabby Wallet connection flow and updated dApp URL configuration.

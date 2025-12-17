@@ -45,6 +45,10 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
   /// Track relay connection state for cold start recovery
   bool _isRelayConnected = false;
 
+  /// Whether a relay reconnection is currently in progress
+  /// Used to prevent multiple simultaneous reconnection attempts
+  bool _isReconnecting = false;
+
   /// Whether the adapter is currently waiting for wallet approval
   /// Used by lifecycle observer to know when to check for session on resume
   bool _isWaitingForApproval = false;
@@ -170,21 +174,38 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
 
     if (state == AppLifecycleState.resumed && _isWaitingForApproval) {
       // App returned to foreground while waiting for wallet approval
-      // Proactively check if session was established
-      _checkConnectionOnResume();
+      // CRITICAL: Ensure relay is connected before checking session
+      _ensureRelayAndCheckSession();
     }
   }
 
-  /// Check for session updates when app resumes from background
+  /// Ensure relay is connected and then check for session
   ///
-  /// This is called when:
-  /// 1. User approved connection in wallet app and returned to our app
-  /// 2. App was brought back to foreground during connection wait
-  ///
-  /// The WalletConnect relay may have already received the session,
-  /// but the future.timeout is still waiting. This actively checks
-  /// for available sessions to complete the connection faster.
-  Future<void> _checkConnectionOnResume() async {
+  /// This is the critical path for handling app resume after wallet approval.
+  /// The relay WebSocket may have disconnected while app was in background,
+  /// so we must reconnect before checking for session updates.
+  Future<void> _ensureRelayAndCheckSession() async {
+    AppLogger.wallet('Ensuring relay connection before session check');
+
+    // 1. Refresh relay state to detect zombie connections
+    _refreshRelayState();
+
+    // 2. Attempt relay reconnection if needed
+    if (!_isRelayConnected && !_isReconnecting) {
+      final relayReady = await ensureRelayConnected(
+        timeout: const Duration(seconds: 3),
+      );
+
+      AppLogger.wallet('Relay reconnection on resume', data: {
+        'success': relayReady,
+      });
+
+      if (!relayReady) {
+        AppLogger.wallet('Relay reconnection failed on resume, continuing anyway...');
+      }
+    }
+
+    // 3. Check for session
     await checkConnectionOnResume();
   }
 
@@ -194,6 +215,12 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
   @protected
   Future<void> checkConnectionOnResume() async {
     AppLogger.wallet('Checking connection after app resume');
+
+    // 0. Refresh relay state to detect zombie connections
+    final relayActuallyConnected = _refreshRelayState();
+    if (!relayActuallyConnected) {
+      AppLogger.wallet('Relay not actually connected, session sync may be delayed');
+    }
 
     // 1. Session already established - clear flag and return
     if (_session != null) {
@@ -215,6 +242,7 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
         AppLogger.wallet('Found valid session after resume', data: {
           'topic': session.topic,
           'peerName': session.peer?.metadata.name,
+          'relayConnected': relayActuallyConnected,
         });
 
         // Update session and emit status
@@ -231,7 +259,10 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
 
     // 4. No session found yet - continue waiting for timeout
     // Do NOT clear _isWaitingForApproval here - we need to keep checking
-    AppLogger.wallet('No session found after resume, continuing to wait');
+    AppLogger.wallet('No session found after resume, continuing to wait', data: {
+      'relayConnected': relayActuallyConnected,
+      'sessionCount': sessions.length,
+    });
   }
 
   // ============================================================
@@ -251,12 +282,86 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
   }
 
   /// Handle relay client error event
+  ///
+  /// When an error occurs while waiting for wallet approval, we schedule
+  /// an automatic reconnection attempt to recover the connection.
   void _onRelayError(dynamic event) {
-    AppLogger.wallet('Relay client error', data: {'error': event?.toString()});
+    // Extract detailed error information if available
+    String errorMessage = 'Unknown error';
+    try {
+      if (event != null) {
+        errorMessage = event.toString();
+      }
+    } catch (e) {
+      errorMessage = 'Error extracting message: $e';
+    }
+
+    AppLogger.wallet('Relay client error', data: {
+      'error': errorMessage,
+      'isWaitingForApproval': _isWaitingForApproval,
+      'isReconnecting': _isReconnecting,
+    });
+
+    // If we're waiting for wallet approval, schedule reconnection
+    if (_isWaitingForApproval && !_isReconnecting) {
+      _scheduleRelayReconnect();
+    }
+  }
+
+  /// Schedule a relay reconnection attempt
+  ///
+  /// Uses a short delay to avoid immediate retry storms.
+  /// Only one reconnection can be in progress at a time.
+  void _scheduleRelayReconnect() {
+    if (_isReconnecting) {
+      AppLogger.wallet('Relay reconnection already in progress, skipping');
+      return;
+    }
+
+    _isReconnecting = true;
+    AppLogger.wallet('Scheduling relay reconnection in 500ms');
+
+    Future.delayed(const Duration(milliseconds: 500), () async {
+      try {
+        final success = await ensureRelayConnected(
+          timeout: const Duration(seconds: 3),
+        );
+        AppLogger.wallet('Scheduled relay reconnection result', data: {
+          'success': success,
+        });
+      } catch (e) {
+        AppLogger.wallet('Scheduled relay reconnection failed', data: {
+          'error': e.toString(),
+        });
+      } finally {
+        _isReconnecting = false;
+      }
+    });
   }
 
   /// Check if relay is currently connected
   bool get isRelayConnected => _isRelayConnected;
+
+  /// Refresh relay connection state from actual source
+  ///
+  /// This detects "zombie connections" where our cached state says connected
+  /// but the actual WebSocket is disconnected.
+  bool _refreshRelayState() {
+    if (_appKit == null) return false;
+
+    final actualState = _appKit!.core.relayClient.isConnected;
+
+    // Detect state mismatch (zombie connection)
+    if (_isRelayConnected != actualState) {
+      AppLogger.wallet('Relay state mismatch detected', data: {
+        'cached': _isRelayConnected,
+        'actual': actualState,
+      });
+      _isRelayConnected = actualState;
+    }
+
+    return actualState;
+  }
 
   /// Ensure relay is connected, attempting reconnection if needed.
   ///
@@ -561,6 +666,180 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
   /// Get all session accounts (for UI display)
   SessionAccounts getSessionAccounts() => _sessionAccounts;
 
+  /// Prepare connection by generating URI without waiting for session approval.
+  ///
+  /// This is useful for wallet adapters that need to:
+  /// 1. Generate the WalletConnect URI
+  /// 2. Open the wallet app with the URI
+  /// 3. Then wait for session approval
+  ///
+  /// Returns a [Future] that completes with [WalletEntity] when the session is approved.
+  /// The URI can be retrieved via [getConnectionUri()] after this method returns.
+  ///
+  /// Uses a Watchdog Timer pattern to detect sessions even when the
+  /// onSessionConnect event is missed (e.g., when app is in background).
+  ///
+  /// Throws [WalletException] if connection fails.
+  Future<Future<WalletEntity>> prepareConnection({int? chainId}) async {
+    AppLogger.wallet('🔵 prepareConnection START', data: {
+      'chainId': chainId,
+      'hasExistingSession': _session != null,
+      'existingSessionTopic': _session?.topic,
+      'isInitialized': isInitialized,
+    });
+
+    if (!isInitialized) {
+      await initialize();
+    }
+
+    final targetChainId = chainId ?? 1;
+    _requestedChainId = targetChainId;
+
+    // Mark that we're waiting for approval
+    _isWaitingForApproval = true;
+
+    _connectionController.add(WalletConnectionStatus.connecting(
+      message: 'Initializing connection...',
+      retryCount: 0,
+      maxRetries: 1,
+    ));
+
+    AppLogger.wallet('🔵 prepareConnection: about to call _appKit.connect()', data: {
+      'targetChainId': targetChainId,
+    });
+
+    // Create namespace
+    final requiredNamespaces = {
+      'eip155': RequiredNamespace(
+        chains: ['eip155:$targetChainId'],
+        methods: _config.supportedMethods,
+        events: _config.supportedEvents,
+      ),
+    };
+
+    final optionalNamespaces = {
+      'eip155': RequiredNamespace(
+        chains: _config.supportedChainIds
+            .map((id) => 'eip155:$id')
+            .toList(),
+        methods: _config.supportedMethods,
+        events: _config.supportedEvents,
+      ),
+    };
+
+    // Store initial session topics to detect new sessions
+    final initialSessionTopics = _appKit!.sessions.getAll().map((s) => s.topic).toSet();
+
+    // Create connect response - this generates the URI
+    AppLogger.wallet('🔵 prepareConnection: calling _appKit!.connect() NOW');
+    final connectResponse = await _appKit!.connect(
+      requiredNamespaces: requiredNamespaces,
+      optionalNamespaces: optionalNamespaces,
+    );
+    AppLogger.wallet('🔵 prepareConnection: _appKit!.connect() RETURNED');
+
+    _uri = connectResponse.uri?.toString();
+
+    AppLogger.wallet('🔵 prepareConnection: URI generated', data: {
+      'hasUri': _uri != null,
+      'uriPrefix': _uri?.substring(0, _uri!.length.clamp(0, 50)),
+    });
+
+    _connectionController.add(WalletConnectionStatus.connecting(
+      message: 'Waiting for wallet approval...',
+      retryCount: 0,
+      maxRetries: 1,
+    ));
+
+    // ★ Watchdog Pattern: Use Completer to handle both event-based and polling-based session detection
+    final sessionCompleter = Completer<SessionData>();
+    Timer? watchdogTimer;
+
+    // 1. Event-based listener (original session.future)
+    // We intentionally don't await this - it runs in parallel with the watchdog
+    unawaited(connectResponse.session.future.then((session) {
+      if (!sessionCompleter.isCompleted) {
+        AppLogger.wallet('⚡ Session received via event', data: {
+          'topic': session.topic.substring(0, 10),
+          'peerName': session.peer.metadata.name,
+        });
+        sessionCompleter.complete(session);
+      }
+    }).catchError((e) {
+      if (!sessionCompleter.isCompleted) {
+        AppLogger.wallet('❌ Session event error', data: {'error': e.toString()});
+        sessionCompleter.completeError(e);
+      }
+    }));
+
+    // 2. Watchdog Timer: Poll for new sessions every second
+    // This catches sessions that arrive while app is in background
+    // and the event listener missed the onSessionConnect event
+    watchdogTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (sessionCompleter.isCompleted) {
+        timer.cancel();
+        return;
+      }
+
+      final currentSessions = _appKit!.sessions.getAll();
+      for (final session in currentSessions) {
+        // Check if this is a NEW session (not in initial set) and valid for this wallet type
+        if (!initialSessionTopics.contains(session.topic) && isSessionValid(session)) {
+          AppLogger.wallet('🔍 Watchdog found new session!', data: {
+            'topic': session.topic.substring(0, 10),
+            'peerName': session.peer.metadata.name,
+            'initialCount': initialSessionTopics.length,
+            'currentCount': currentSessions.length,
+          });
+          timer.cancel();
+          if (!sessionCompleter.isCompleted) {
+            sessionCompleter.complete(session);
+          }
+          return;
+        }
+      }
+    });
+
+    // Return a future that completes when session is approved (via event OR watchdog)
+    return sessionCompleter.future.then<WalletEntity>((session) {
+      // Clean up watchdog timer
+      watchdogTimer?.cancel();
+
+      _session = session;
+      _parseSessionAccounts();
+
+      if (connectedAddress == null) {
+        throw const WalletException(
+          message: 'Failed to get connected address',
+          code: 'NO_ADDRESS',
+        );
+      }
+
+      final wallet = WalletEntity(
+        address: connectedAddress!,
+        type: walletType,
+        chainId: _requestedChainId ?? currentChainId,
+        sessionTopic: _session!.topic,
+        connectedAt: DateTime.now(),
+        metadata: {
+          'sessionAccounts': _sessionAccounts.accounts.map((a) => a.caip10Id).toList(),
+          'hasMultipleAccounts': hasMultipleAccounts,
+          'uniqueAddressCount': _sessionAccounts.uniqueAddresses.length,
+        },
+      );
+
+      _connectionController.add(WalletConnectionStatus.connected(wallet));
+      _isWaitingForApproval = false;
+
+      AppLogger.wallet('Wallet connected via prepareConnection', data: {
+        'address': wallet.address,
+        'chainId': wallet.chainId,
+      });
+
+      return wallet;
+    });
+  }
+
   @override
   Future<WalletEntity> connect({int? chainId, String? cluster}) async {
     if (!isInitialized) {
@@ -582,6 +861,8 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
     ));
 
     while (retryCount < maxRetries) {
+      Timer? watchdogTimer;
+
       try {
         // Create namespace
         final requiredNamespaces = {
@@ -602,6 +883,9 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
           ),
         };
 
+        // Store initial session topics to detect new sessions
+        final initialSessionTopics = _appKit!.sessions.getAll().map((s) => s.topic).toSet();
+
         // Create connect response
         final connectResponse = await _appKit!.connect(
           requiredNamespaces: requiredNamespaces,
@@ -621,16 +905,65 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
           maxRetries: maxRetries,
         ));
 
-        // Wait for session approval
-        _session = await connectResponse.session.future.timeout(
+        // ★ Watchdog Pattern: Use Completer to handle both event-based and polling-based session detection
+        final sessionCompleter = Completer<SessionData>();
+
+        // 1. Event-based listener (original session.future)
+        // We intentionally don't await this - it runs in parallel with the watchdog
+        unawaited(connectResponse.session.future.then((session) {
+          if (!sessionCompleter.isCompleted) {
+            AppLogger.wallet('⚡ Session received via event (connect)', data: {
+              'topic': session.topic.substring(0, 10),
+              'peerName': session.peer.metadata.name,
+            });
+            sessionCompleter.complete(session);
+          }
+        }).catchError((e) {
+          if (!sessionCompleter.isCompleted) {
+            AppLogger.wallet('❌ Session event error (connect)', data: {'error': e.toString()});
+            sessionCompleter.completeError(e);
+          }
+        }));
+
+        // 2. Watchdog Timer: Poll for new sessions every second
+        watchdogTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+          if (sessionCompleter.isCompleted) {
+            timer.cancel();
+            return;
+          }
+
+          final currentSessions = _appKit!.sessions.getAll();
+          for (final session in currentSessions) {
+            // Check if this is a NEW session and valid for this wallet type
+            if (!initialSessionTopics.contains(session.topic) && isSessionValid(session)) {
+              AppLogger.wallet('🔍 Watchdog found new session! (connect)', data: {
+                'topic': session.topic.substring(0, 10),
+                'peerName': session.peer.metadata.name,
+                'attempt': retryCount + 1,
+              });
+              timer.cancel();
+              if (!sessionCompleter.isCompleted) {
+                sessionCompleter.complete(session);
+              }
+              return;
+            }
+          }
+        });
+
+        // Wait for session approval with timeout
+        _session = await sessionCompleter.future.timeout(
           AppConstants.connectionTimeout,
           onTimeout: () {
+            watchdogTimer?.cancel();
             throw WalletException(
               message: 'Connection timed out after ${AppConstants.connectionTimeout.inSeconds}s',
               code: 'TIMEOUT',
             );
           },
         );
+
+        // Clean up watchdog timer on success
+        watchdogTimer?.cancel();
 
         // Parse accounts from the approved session
         _parseSessionAccounts();
@@ -673,6 +1006,7 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
         return wallet;
 
       } on WalletException catch (e) {
+        watchdogTimer?.cancel();
         retryCount++;
         AppLogger.w('Connection attempt $retryCount failed: ${e.message}');
 
@@ -703,7 +1037,8 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
         rethrow;
 
       } catch (e) {
-        // Unexpected error - clear waiting flag
+        // Unexpected error - clean up and clear waiting flag
+        watchdogTimer?.cancel();
         _isWaitingForApproval = false;
         AppLogger.e('Unexpected connection error', e);
         _connectionController.add(WalletConnectionStatus.error(e.toString()));
@@ -724,6 +1059,71 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
   @override
   Future<String?> getConnectionUri() async {
     return _uri;
+  }
+
+  /// Clear all previous WalletConnect pairings and sessions.
+  ///
+  /// This should be called before establishing a new connection to ensure
+  /// clean state, especially when switching between different wallet apps.
+  /// This prevents issues where stale session data from a previous wallet
+  /// (e.g., Phantom) could interfere with a new connection (e.g., Trust Wallet).
+  Future<void> clearPreviousSessions() async {
+    if (_appKit == null) {
+      AppLogger.wallet('clearPreviousSessions: AppKit not initialized, skipping');
+      return;
+    }
+
+    try {
+      // Clear any existing sessions
+      final sessions = _appKit!.sessions.getAll();
+      AppLogger.wallet('🔴 clearPreviousSessions: clearing sessions', data: {
+        'sessionCount': sessions.length,
+      });
+
+      for (final session in sessions) {
+        try {
+          await _appKit!.disconnectSession(
+            topic: session.topic,
+            reason: ReownSignError(
+              code: 6000,
+              message: 'Clearing previous sessions for new connection',
+            ),
+          );
+          AppLogger.wallet('🔴 Disconnected session', data: {
+            'topic': session.topic.substring(0, 10),
+            'peerName': session.peer.metadata.name,
+          });
+        } catch (e) {
+          AppLogger.d('Failed to disconnect session: ${session.topic}');
+        }
+      }
+
+      // Clear any existing pairings
+      final pairings = _appKit!.core.pairing.getStore().getAll();
+      AppLogger.wallet('🔴 clearPreviousSessions: clearing pairings', data: {
+        'pairingCount': pairings.length,
+      });
+
+      for (final pairing in pairings) {
+        try {
+          await _appKit!.core.pairing.disconnect(topic: pairing.topic);
+          AppLogger.wallet('🔴 Disconnected pairing', data: {
+            'topic': pairing.topic.substring(0, 10),
+          });
+        } catch (e) {
+          AppLogger.d('Failed to disconnect pairing: ${pairing.topic}');
+        }
+      }
+
+      // Clear local state
+      _session = null;
+      _uri = null;
+      _sessionAccounts = const SessionAccounts.empty();
+
+      AppLogger.wallet('🔴 clearPreviousSessions: completed');
+    } catch (e) {
+      AppLogger.e('Error clearing previous sessions', e);
+    }
   }
 
   @override
