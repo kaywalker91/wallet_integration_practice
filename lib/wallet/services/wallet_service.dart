@@ -49,12 +49,21 @@ class WalletService {
       final address = _activeAdapter!.connectedAddress;
       if (address != null) {
         // Reconstruct wallet entity from adapter state
+        // Handle both EVM (chainId) and Solana (cluster) adapters safely
+        int? chainId;
+        String? cluster;
+
+        if (_activeAdapter is EvmWalletAdapter) {
+          chainId = (_activeAdapter as EvmWalletAdapter).currentChainId;
+        } else if (_activeAdapter is SolanaWalletAdapter) {
+          cluster = (_activeAdapter as SolanaWalletAdapter).currentCluster;
+        }
+
         final wallet = WalletEntity(
           address: address,
           type: _activeAdapter!.walletType,
-          chainId: _activeAdapter is EvmWalletAdapter
-              ? (_activeAdapter as EvmWalletAdapter).currentChainId
-              : null,
+          chainId: chainId,
+          cluster: cluster,
           connectedAt: DateTime.now(),
         );
         _connectedWallet = wallet;
@@ -174,7 +183,12 @@ class WalletService {
     _activeAdapter = adapter;
 
     // Subscribe to adapter's connection stream
-    await _adapterSubscription?.cancel();
+    // Cancel existing subscription first and clear reference to prevent race condition
+    final oldAdapterSub = _adapterSubscription;
+    _adapterSubscription = null;
+    await oldAdapterSub?.cancel();
+
+    // Now create new subscription after old one is fully canceled
     _adapterSubscription = adapter.connectionStream.listen((status) {
       _connectionController.add(status);
       if (status.isConnected) {
@@ -185,7 +199,11 @@ class WalletService {
     });
 
     // Subscribe to accounts changed stream if WalletConnect adapter
-    await _accountsSubscription?.cancel();
+    // Same pattern: clear reference before cancel to prevent race condition
+    final oldAccountsSub = _accountsSubscription;
+    _accountsSubscription = null;
+    await oldAccountsSub?.cancel();
+
     if (adapter is WalletConnectAdapter) {
       _accountsSubscription = adapter.accountsChangedStream.listen((accounts) {
         _accountsChangedController.add(accounts);
@@ -228,7 +246,12 @@ class WalletService {
       _activeAdapter = adapter;
 
       // Subscribe to adapter's connection stream
-      await _adapterSubscription?.cancel();
+      // Cancel existing subscription first and clear reference to prevent race condition
+      final oldAdapterSub = _adapterSubscription;
+      _adapterSubscription = null;
+      await oldAdapterSub?.cancel();
+
+      // Now create new subscription after old one is fully canceled
       _adapterSubscription = adapter.connectionStream.listen((status) {
         _connectionController.add(status);
         if (status.isConnected) {
@@ -239,7 +262,11 @@ class WalletService {
       });
 
       // Subscribe to accounts changed stream if WalletConnect adapter
-      await _accountsSubscription?.cancel();
+      // Same pattern: clear reference before cancel to prevent race condition
+      final oldAccountsSub = _accountsSubscription;
+      _accountsSubscription = null;
+      await oldAccountsSub?.cancel();
+
       if (adapter is WalletConnectAdapter) {
         _accountsSubscription = adapter.accountsChangedStream.listen((accounts) {
           _accountsChangedController.add(accounts);

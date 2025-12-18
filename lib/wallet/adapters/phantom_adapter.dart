@@ -129,20 +129,28 @@ class PhantomAdapter extends SolanaWalletAdapter {
       _connectionCompleter = Completer<WalletEntity>();
 
       // Wait for the deep link callback with timeout
-      final wallet = await _connectionCompleter!.future.timeout(
-        _connectionTimeout,
-        onTimeout: () {
-          throw const WalletException(
-            message: '연결 시간이 초과되었습니다. Phantom 앱에서 연결을 승인해주세요.',
-            code: 'CONNECTION_TIMEOUT',
-          );
-        },
-      );
-
-      return wallet;
+      try {
+        final wallet = await _connectionCompleter!.future.timeout(
+          _connectionTimeout,
+          onTimeout: () {
+            // Clean up completer on timeout to prevent memory leak
+            _connectionCompleter = null;
+            throw const WalletException(
+              message: '연결 시간이 초과되었습니다. Phantom 앱에서 연결을 승인해주세요.',
+              code: 'CONNECTION_TIMEOUT',
+            );
+          },
+        );
+        return wallet;
+      } catch (e) {
+        // Ensure completer is cleaned up on any error during wait
+        _connectionCompleter = null;
+        rethrow;
+      }
     } catch (e) {
       AppLogger.e('Phantom connection failed', e);
       _connectionController.add(WalletConnectionStatus.error(e.toString()));
+      // Final cleanup in outer catch (defensive)
       _connectionCompleter = null;
       rethrow;
     }
@@ -194,26 +202,45 @@ class PhantomAdapter extends SolanaWalletAdapter {
       // Handle Encrypted Response (Standard for Connect)
       if (phantomPublicKeyStr != null && dataStr != null && nonceStr != null) {
         AppLogger.wallet('🔐 Processing encrypted Phantom response...');
-        
+
         try {
           if (_dappPrivateKey == null) {
              throw const WalletException(message: 'Key pair lost during connection', code: 'KEY_LOST');
           }
 
-          // 1. Store Phantom's public key
+          // 1. Store Phantom's public key with validation
           _phantomPublicKey = _decodeBase58(phantomPublicKeyStr);
-          
-          // 2. Decode nonce and data
+          if (_phantomPublicKey == null || _phantomPublicKey!.length != 32) {
+            throw const WalletException(
+              message: 'Invalid Phantom public key length',
+              code: 'INVALID_PUBLIC_KEY',
+            );
+          }
+
+          // 2. Decode nonce and data with validation
           final nonce = _decodeBase58(nonceStr);
+          if (nonce.length != 24) {
+            throw const WalletException(
+              message: 'Invalid nonce length (expected 24 bytes)',
+              code: 'INVALID_NONCE',
+            );
+          }
+
           final encryptedData = _decodeBase58(dataStr);
-          
+          if (encryptedData.isEmpty) {
+            throw const WalletException(
+              message: 'Empty encrypted data',
+              code: 'EMPTY_DATA',
+            );
+          }
+
           // 3. Decrypt using TweetNaCl directly
           // We need private key bytes and their public key bytes
           final privateKeyBytes = Uint8List.fromList(_dappPrivateKey!);
           final theirPublicKeyBytes = _phantomPublicKey!;
 
           // Manual padding for TweetNaCl low-level API
-          // boxzerobytes = 16, zerobytes = 32
+          // boxzerobytes = 16 (prepended to ciphertext), zerobytes = 32 (stripped from plaintext)
           const boxZeroBytesLength = 16;
           const zeroBytesLength = 32;
 
@@ -224,7 +251,9 @@ class PhantomAdapter extends SolanaWalletAdapter {
           final m = Uint8List(c.length);
 
           // Call crypto_box_open with 6 arguments
-          // crypto_box_open(m, c, d, n, pk, sk)
+          // The function modifies 'm' in place with decrypted data
+          // It returns the output buffer (m) on success
+          // Authentication failure will throw an exception internally
           TweetNaCl.crypto_box_open(
             m,
             c,
@@ -235,23 +264,38 @@ class PhantomAdapter extends SolanaWalletAdapter {
           );
 
           // Result is in m, starting at offset 32 (zeroBytesLength)
-          
           final messageBytes = m.sublist(zeroBytesLength);
-          final decryptedString = utf8.decode(messageBytes);
-          
-          AppLogger.wallet('🔓 Decrypted Phantom payload', data: {'json': decryptedString});
-          
-          final payload = jsonDecode(decryptedString);
-          
-          // 4. Extract data
-          if (payload['public_key'] != null) {
-            walletAddress = payload['public_key'];
+
+          // Find the actual end of the message (trim null bytes)
+          var endIndex = messageBytes.length;
+          while (endIndex > 0 && messageBytes[endIndex - 1] == 0) {
+            endIndex--;
           }
-          if (payload['session'] != null) {
-            _session = payload['session'];
+          final trimmedBytes = messageBytes.sublist(0, endIndex);
+
+          final decryptedString = utf8.decode(trimmedBytes);
+
+          AppLogger.wallet('🔓 Decrypted Phantom payload', data: {'json': decryptedString});
+
+          final payload = jsonDecode(decryptedString);
+
+          // 4. Extract data with type checking
+          if (payload is Map<String, dynamic>) {
+            if (payload['public_key'] != null) {
+              walletAddress = payload['public_key'] as String?;
+            }
+            if (payload['session'] != null) {
+              _session = payload['session'] as String?;
+            }
+          } else {
+            throw const WalletException(
+              message: 'Invalid payload format from Phantom',
+              code: 'INVALID_PAYLOAD',
+            );
           }
         } catch (e) {
           AppLogger.e('Decryption failed', e);
+          if (e is WalletException) rethrow;
           throw WalletException(
             message: 'Phantom 응답을 복호화하는데 실패했습니다: $e',
             code: 'DECRYPTION_FAILED',

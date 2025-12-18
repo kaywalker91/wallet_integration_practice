@@ -17,9 +17,13 @@ class DeepLinkService {
 
   final Map<String, DeepLinkCallback> _handlers = {};
   final _deepLinkController = StreamController<Uri>.broadcast();
+  final _errorController = StreamController<DeepLinkError>.broadcast();
 
   /// Stream of incoming deep links
   Stream<Uri> get deepLinkStream => _deepLinkController.stream;
+
+  /// Stream of deep link handling errors for UI feedback
+  Stream<DeepLinkError> get errorStream => _errorController.stream;
 
   /// Initialize the deep link service
   Future<void> initialize() async {
@@ -73,6 +77,15 @@ class DeepLinkService {
           return;
         } catch (e) {
           AppLogger.e('Error in deep link handler for ${entry.key}', e);
+          // Emit error to stream so UI can display feedback to user
+          _errorController.add(DeepLinkError(
+            handlerKey: entry.key,
+            uri: uri,
+            error: e,
+            message: 'Failed to process wallet callback: ${e.toString()}',
+          ));
+          // Don't continue to other handlers on error - the matched handler failed
+          return;
         }
       }
     }
@@ -153,6 +166,26 @@ class DeepLinkService {
   Future<void> dispose() async {
     await _linkSubscription?.cancel();
     await _deepLinkController.close();
+    await _errorController.close();
     _handlers.clear();
   }
+}
+
+/// Error information for deep link handling failures
+class DeepLinkError {
+  final String handlerKey;
+  final Uri uri;
+  final Object error;
+  final String message;
+  final DateTime timestamp;
+
+  DeepLinkError({
+    required this.handlerKey,
+    required this.uri,
+    required this.error,
+    required this.message,
+  }) : timestamp = DateTime.now();
+
+  @override
+  String toString() => 'DeepLinkError(handler: $handlerKey, message: $message)';
 }
