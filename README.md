@@ -7,13 +7,43 @@ iLity Hub를 위한 지갑 연동 실습
 - 멀티체인 지갑 지원 (EVM 체인 + 솔라나)
 - WalletConnect v2 연동
 - 딥링크 지갑 연결 흐름
-- 지원되는 지갑: 메타마스크(MetaMask), 트러스트 월렛(Trust Wallet), 팬텀(Phantom), 래비(Rabby), OKX 월렛
+- 지원되는 지갑: 메타마스크(MetaMask), 트러스트 월렛(Trust Wallet), 팬텀(Phantom), 래비(Rabby)
 
 ## 최근 변경 사항
 
+### 2025-12-19: Sentry 기반 로깅 및 지갑 연결 복구 UX 강화
+
+**기능**: Sentry 에러 추적 도입과 지갑 연결 상태 로깅 체계화, 승인 지연 시 복구 옵션 제공, OKX 지갑 지원 정리.
+
+**주요 개선 사항**:
+1.  **Sentry 도입**:
+    *   `SentryService` 추가 및 `sentry_flutter` 의존성 반영.
+    *   Debug 모드에서 `DebugLogService`로 Sentry 이벤트를 메모리에 저장해 실시간 확인 가능.
+2.  **지갑 연결 로깅 체계화**:
+    *   `WalletLogService` + 전용 모델/enum으로 연결 단계, 릴레이/세션 상태, 딥링크 리턴을 구조화 기록.
+    *   딥링크 핸들러 예외를 안전 처리하고 경고 수준으로 기록.
+3.  **승인 지연 복구 UX**:
+    *   승인 대기 15초 경과 시 QR 코드/URI 복사/재시도 옵션을 안내.
+    *   앱 복귀 시 릴레이 재연결 로직 강화 및 백그라운드 재시도 제한.
+4.  **지갑 지원 정리**:
+    *   OKX 관련 어댑터/상수/플랫폼 스킴 제거 및 목록 정리.
+
+**변경된 파일**:
+- `lib/core/services/sentry_service.dart` (신규)
+- `lib/core/services/debug_log_service.dart` (신규)
+- `lib/core/services/wallet_log_service.dart` (신규)
+- `lib/core/models/wallet_log_*.dart` (신규)
+- `lib/wallet/adapters/walletconnect_adapter.dart`
+- `lib/presentation/screens/onboarding/onboarding_loading_page.dart`
+- `android/app/src/main/AndroidManifest.xml`
+- `ios/Runner/Info.plist`
+- `pubspec.yaml`
+
+---
+
 ### 2025-12-17: 포괄적인 WalletConnect 안정성 및 UX 개선
 
-**기능**: WalletConnect 기반 지갑(메타마스크, 트러스트 월렛, OKX)의 주요 안정성 개선 및 팬텀 월렛의 UX 수정.
+**기능**: WalletConnect 기반 지갑(메타마스크, 트러스트 월렛)의 주요 안정성 개선 및 팬텀 월렛의 UX 수정.
 
 **주요 개선 사항**:
 1.  **WalletConnect 안정성**:
@@ -36,7 +66,6 @@ iLity Hub를 위한 지갑 연동 실습
 - `lib/wallet/adapters/metamask_adapter.dart`: `prepareConnection`을 사용하도록 리팩토링.
 - `lib/wallet/adapters/trust_wallet_adapter.dart`: `prepareConnection` 및 세션 삭제를 사용하도록 리팩토링.
 - `lib/wallet/adapters/phantom_adapter.dart`: 연결 해제 로직 개선.
-- `lib/wallet/adapters/okx_wallet_adapter.dart`: 릴레이 확인 로직 추가.
 
 ---
 
@@ -77,35 +106,6 @@ iLity Hub를 위한 지갑 연동 실습
 
 ---
 
-### 2025-12-16: OKX 월렛 연결 안정성 수정
-
-**문제 1**: 앱 콜드 스타트 후 OKX 월렛 연결 시 무한 승인 루프 발생.
-
-**원인**: 사용자가 OKX 월렛에 있는 동안 Android가 앱 프로세스를 종료하면 WalletConnect WebSocket 릴레이 연결은 끊어지지만 세션 객체는 저장소에 유지되어 불일치 발생.
-
-**해결**:
-1. `WalletConnectAdapter`에 릴레이 상태 추적 및 `ensureRelayConnected()` 메서드 추가
-2. 세션을 복원하기 전에 릴레이 연결을 확인하도록 `_restoreSession()` 수정
-3. 새로운 연결 없이 복원을 위해 `WalletService`에 `initializeAdapter()` 메서드 추가
-4. `OnboardingLoadingPage`가 릴레이 재연결 흐름을 사용하도록 업데이트
-
-**문제 2**: 삼성 갤럭시 기기에서 OKX 월렛에서 복귀 후 검은 화면 발생.
-
-**원인**: Mali GPU와 Impeller(Vulkan) 렌더링 엔진의 호환성 문제. 앱 재개 시 Surface 재생성 실패.
-
-**해결**:
-1. Impeller 렌더링 엔진 비활성화 (Skia/OpenGL로 대체)
-2. 안정적인 액티비티 재사용을 위해 `launchMode`를 `singleTop`에서 `singleTask`로 변경
-3. 재개 시 강제 UI 다시 그리기를 위해 앱 수준 `WidgetsBindingObserver` 추가
-
-**변경된 파일**:
-- `android/app/src/main/AndroidManifest.xml` - Impeller 비활성화, launchMode 변경
-- `lib/main.dart` - UI 다시 그리기를 위한 라이프사이클 옵저버 추가
-- `lib/wallet/adapters/walletconnect_adapter.dart` - 릴레이 재연결 지원
-- `lib/wallet/services/wallet_service.dart` - `initializeAdapter()` 메서드
-- `lib/presentation/screens/onboarding/onboarding_loading_page.dart` - 복원 흐름
-
----
 
 ### 2025-12-12: 코인베이스(Coinbase) 월렛 네이티브 SDK 및 Reown AppKit 통합
 
@@ -124,7 +124,7 @@ iLity Hub를 위한 지갑 연동 실습
 
 ### 2025-12-10: 지갑 복귀 시 무한 로딩 수정
 
-**문제**: OKX 월렛에서 연결 승인 후 앱으로 돌아오면 온보딩 화면에서 무한 로딩이 표시됨.
+**문제**: 지갑에서 연결 승인 후 앱으로 돌아오면 온보딩 화면에서 무한 로딩이 표시됨.
 
 **원인**:
 - 앱이 백그라운드에 있는 동안 WalletConnect 세션 이벤트가 발생함

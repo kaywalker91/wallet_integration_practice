@@ -10,7 +10,6 @@ export 'adapters/metamask_adapter.dart';
 export 'adapters/phantom_adapter.dart';
 export 'adapters/trust_wallet_adapter.dart';
 export 'adapters/rabby_wallet_adapter.dart';
-export 'adapters/okx_wallet_adapter.dart';
 
 // Services
 export 'services/wallet_service.dart';

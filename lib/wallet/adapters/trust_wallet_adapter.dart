@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:reown_appkit/reown_appkit.dart';
+import 'package:sentry_flutter/sentry_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wallet_integration_practice/core/core.dart';
 import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
@@ -51,10 +52,9 @@ class TrustWalletAdapter extends WalletConnectAdapter {
     deepLinkService.registerHandler('trust', _handleTrustCallback);
     deepLinkService.registerHandler('trustwallet', _handleTrustCallback);
 
-    // Note: We do NOT register 'app_resumed' handler here to avoid
-    // conflict with OKX Wallet adapter which also uses this handler.
+    // Note: We do NOT register an 'app_resumed' handler here.
     // The lifecycle observer in WalletConnectAdapter base class
-    // will handle generic app resume scenarios.
+    // handles generic app resume scenarios.
 
     _handlersRegistered = true;
     AppLogger.wallet('Trust Wallet deep link handlers registered');
@@ -110,6 +110,21 @@ class TrustWalletAdapter extends WalletConnectAdapter {
       // Directly call the protected method instead of lifecycle callback
       // This prevents duplicate triggers from lifecycle events
       await checkConnectionOnResume();
+    } catch (e, st) {
+      // Handle StateError and other exceptions during relay reconnection
+      // This prevents app crash when WebSocket channel is already closed
+      AppLogger.wallet('Trust callback handler error (non-fatal)', data: {
+        'error': e.toString(),
+        'errorType': e.runtimeType.toString(),
+      });
+
+      // Track in Sentry as warning (not error) since this is recoverable
+      SentryService.instance.captureException(
+        e,
+        stackTrace: st,
+        level: SentryLevel.warning,
+        tags: {'error_type': 'trust_callback_relay', 'wallet_type': 'trust'},
+      );
     } finally {
       _isProcessingCallback = false;
     }
@@ -131,7 +146,7 @@ class TrustWalletAdapter extends WalletConnectAdapter {
 
   /// Validate session - only accept Trust Wallet sessions
   ///
-  /// This prevents cross-wallet session conflicts (e.g., OKX session being reused).
+  /// This prevents cross-wallet session conflicts.
   ///
   /// Validation strategy:
   /// 1. Accept if name contains 'trust'
@@ -164,7 +179,7 @@ class TrustWalletAdapter extends WalletConnectAdapter {
     }
 
     // Reject if clearly another wallet
-    final otherWallets = ['metamask', 'okx', 'okex', 'phantom', 'rabby', 'rainbow', 'coinbase'];
+    final otherWallets = ['metamask', 'phantom', 'rabby', 'rainbow', 'coinbase'];
     for (final wallet in otherWallets) {
       if (name.contains(wallet)) {
         AppLogger.wallet('Session REJECTED: belongs to $wallet');

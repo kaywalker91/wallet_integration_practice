@@ -48,7 +48,7 @@ class RabbyWalletAdapter extends WalletConnectAdapter {
   /// 3. rabby://wc?uri=... - Standard WC path
   /// 4. rabby://?uri=... - No path
   /// 5. https://rabby.io/wc?uri=... - Universal Link
-  /// 6. wc:// scheme - OS wallet picker (Bottom to avoid OKX hijack)
+  /// 6. wc:// scheme - OS wallet picker (kept late to avoid hijacking)
   /// 7. raw wc: URI - Last resort
   Future<bool> openWithUri(String wcUri) async {
     AppLogger.wallet('Attempting to open Rabby with WC URI', data: {
@@ -148,7 +148,7 @@ class RabbyWalletAdapter extends WalletConnectAdapter {
     }
 
     // Strategy 6: wc:// scheme (OS wallet picker)
-    // Moved to bottom to avoid hijacking by other wallets (e.g., OKX)
+    // Moved to bottom to reduce hijacking by other wallets.
     try {
       final wcSchemeUri = wcUri.replaceFirst('wc:', 'wc://');
       final uri = Uri.parse(wcSchemeUri);

@@ -2,7 +2,6 @@ import 'package:wallet_integration_practice/wallet/adapters/base_wallet_adapter.
 import 'package:wallet_integration_practice/wallet/adapters/coinbase_wallet_adapter.dart';
 import 'package:wallet_integration_practice/wallet/adapters/generic_wallet_connect_adapter.dart';
 import 'package:wallet_integration_practice/wallet/adapters/metamask_adapter.dart';
-import 'package:wallet_integration_practice/wallet/adapters/okx_wallet_adapter.dart';
 import 'package:wallet_integration_practice/wallet/adapters/phantom_adapter.dart';
 import 'package:wallet_integration_practice/wallet/adapters/rabby_wallet_adapter.dart';
 import 'package:wallet_integration_practice/wallet/adapters/trust_wallet_adapter.dart';
@@ -33,8 +32,6 @@ class WalletAdapterFactory {
         return TrustWalletAdapter(config: config);
       case WalletType.rabby:
         return RabbyWalletAdapter(config: config);
-      case WalletType.okxWallet:
-        return OkxWalletAdapter(config: config);
       case WalletType.coinbase:
         return CoinbaseWalletAdapter(config: config);
       case WalletType.rainbow:

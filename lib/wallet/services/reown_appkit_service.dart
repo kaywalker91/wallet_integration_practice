@@ -128,7 +128,6 @@ class ReownAppKitService {
           '4622a2b2d6af1c9844944291e5e7351a6aa24cd7b23099efac1b2fd875da31a0', // Trust Wallet
           'a797aa35c0fadbfc1a53e7f675162ed522696a254325dbef622445543a8e7e31', // Phantom
           'ac78170cfa5f83da4bf6d9124237d1d23b6b63778505500806443c528f804568', // Rabby
-          '971e689d0a5be527bac46f043003b1de4a460773d6d5baf34f647d965768cf8e', // OKX Wallet
         },
         // Supported networks - uses default eip155 chains
         optionalNamespaces: {
@@ -288,7 +287,6 @@ class ReownAppKitService {
     if (peerName.contains('trust')) return WalletType.trustWallet;
     if (peerName.contains('phantom')) return WalletType.phantom;
     if (peerName.contains('rabby')) return WalletType.rabby;
-    if (peerName.contains('okx')) return WalletType.okxWallet;
 
     // Default to WalletConnect for unknown wallets
     return WalletType.walletConnect;

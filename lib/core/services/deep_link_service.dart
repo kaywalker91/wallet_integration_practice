@@ -1,5 +1,8 @@
 import 'dart:async';
 import 'package:app_links/app_links.dart';
+import 'package:sentry_flutter/sentry_flutter.dart';
+import 'package:wallet_integration_practice/core/services/sentry_service.dart';
+import 'package:wallet_integration_practice/core/services/wallet_log_service.dart';
 import 'package:wallet_integration_practice/core/utils/logger.dart';
 
 /// Callback type for deep link handling
@@ -67,6 +70,10 @@ class DeepLinkService {
 
   /// Handle incoming deep link
   Future<void> _handleDeepLink(Uri uri) async {
+    // *** CRITICAL: Log ALL incoming deep links ***
+    // This captures every deep link that enters the app, regardless of handler
+    WalletLogService.instance.logDeepLinkReturn(uri);
+
     _deepLinkController.add(uri);
 
     // Route to registered handlers
@@ -108,7 +115,7 @@ class DeepLinkService {
     if (scheme == 'wip' && host.isEmpty && path.isEmpty) {
       AppLogger.i('📱 App resumed from wallet (empty callback)');
       if (_handlers.containsKey('app_resumed')) {
-        await _handlers['app_resumed']!(uri);
+        await _invokeHandlerSafely('app_resumed', uri);
         return;
       }
       // No handler registered is OK - app lifecycle observer will handle this
@@ -120,7 +127,7 @@ class DeepLinkService {
     if (host == 'phantom' || path.contains('phantom')) {
       if (_handlers.containsKey('phantom')) {
         AppLogger.i('✅ Found phantom handler, invoking...');
-        await _handlers['phantom']!(uri);
+        await _invokeHandlerSafely('phantom', uri);
         return;
       } else {
         AppLogger.e('❌ Phantom handler NOT registered! Available: ${_handlers.keys.toList()}');
@@ -131,7 +138,7 @@ class DeepLinkService {
     if (host == 'metamask' || path.contains('metamask')) {
       if (_handlers.containsKey('metamask')) {
         AppLogger.i('✅ Found metamask handler, invoking...');
-        await _handlers['metamask']!(uri);
+        await _invokeHandlerSafely('metamask', uri);
         return;
       } else {
         AppLogger.e('❌ MetaMask handler NOT registered! Available: ${_handlers.keys.toList()}');
@@ -142,11 +149,11 @@ class DeepLinkService {
     if (host == 'wc' || path.contains('wc')) {
       if (_handlers.containsKey('walletconnect')) {
         AppLogger.i('✅ Found walletconnect handler, invoking...');
-        await _handlers['walletconnect']!(uri);
+        await _invokeHandlerSafely('walletconnect', uri);
         return;
       } else if (_handlers.containsKey('wc')) {
         AppLogger.i('✅ Found wc handler, invoking...');
-        await _handlers['wc']!(uri);
+        await _invokeHandlerSafely('wc', uri);
         return;
       } else {
         AppLogger.e('❌ WalletConnect handler NOT registered! Available: ${_handlers.keys.toList()}');
@@ -156,9 +163,39 @@ class DeepLinkService {
     // Generic callback handler
     if (_handlers.containsKey('default')) {
       AppLogger.i('Using default handler');
-      await _handlers['default']!(uri);
+      await _invokeHandlerSafely('default', uri);
     } else {
       AppLogger.w('⚠️ No handler found for URI: $uri');
+    }
+  }
+
+  /// Safely invoke a registered handler with error handling
+  ///
+  /// This prevents StateError and other exceptions from crashing the app
+  /// when WebSocket channels are closed during relay reconnection.
+  Future<void> _invokeHandlerSafely(String handlerKey, Uri uri) async {
+    try {
+      await _handlers[handlerKey]!(uri);
+    } catch (e, st) {
+      AppLogger.e('Deep link handler error for $handlerKey (non-fatal)', e);
+
+      // Track in Sentry as warning since this is often recoverable
+      // Using unawaited() to explicitly mark fire-and-forget async call
+      unawaited(SentryService.instance.captureException(
+        e,
+        stackTrace: st,
+        level: SentryLevel.warning,
+        tags: {'error_type': 'deep_link_handler', 'handler_key': handlerKey},
+        extras: {'uri': uri.toString()},
+      ));
+
+      // Emit error to stream so UI can display feedback to user
+      _errorController.add(DeepLinkError(
+        handlerKey: handlerKey,
+        uri: uri,
+        error: e,
+        message: 'Deep link handler error: ${e.toString()}',
+      ));
     }
   }
 

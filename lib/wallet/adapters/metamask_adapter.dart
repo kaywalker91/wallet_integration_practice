@@ -129,7 +129,15 @@ class MetaMaskAdapter extends WalletConnectAdapter {
       // Return wallet with correct type
       return wallet.copyWith(type: walletType);
     } catch (e) {
-      AppLogger.e('MetaMask connection error', e);
+      // Don't log expected failures as errors (reduces log noise)
+      if (e is WalletException &&
+          WalletConstants.expectedFailureCodes.contains(e.code)) {
+        AppLogger.wallet('MetaMask connection cancelled/timeout', data: {
+          'code': e.code,
+        });
+      } else {
+        AppLogger.e('MetaMask connection error', e);
+      }
       rethrow;
     }
   }

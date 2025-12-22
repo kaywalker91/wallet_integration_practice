@@ -8,10 +8,21 @@ import 'package:wallet_integration_practice/presentation/presentation.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   // Load environment variables
   await dotenv.load(fileName: ".env");
 
+  // Initialize Sentry for error tracking
+  // Sentry wraps the entire app to catch uncaught exceptions
+  await SentryService.initialize(
+    appRunner: () async {
+      await _initializeApp();
+    },
+  );
+}
+
+/// App initialization logic (separated for Sentry wrapper)
+Future<void> _initializeApp() async {
   // Set preferred orientations
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
@@ -29,6 +40,9 @@ void main() async {
   );
 
   AppLogger.i('Starting Wallet Integration Practice');
+
+  // Set device context for Sentry
+  SentryService.instance.setDeviceContext();
 
   // Initialize deep link service
   await DeepLinkService.instance.initialize();

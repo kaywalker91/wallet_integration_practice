@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:sentry_flutter/sentry_flutter.dart';
 import 'package:wallet_integration_practice/core/core.dart';
 import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
 import 'package:wallet_integration_practice/domain/entities/connected_wallet_entry.dart';
@@ -7,6 +8,9 @@ import 'package:wallet_integration_practice/domain/entities/multi_wallet_state.d
 import 'package:wallet_integration_practice/domain/entities/session_account.dart';
 import 'package:wallet_integration_practice/wallet/wallet.dart';
 import 'package:wallet_integration_practice/presentation/providers/balance_provider.dart';
+
+/// Sentry 서비스 인스턴스 (편의를 위한 getter)
+SentryService get _sentry => SentryService.instance;
 
 /// Provider for DeepLinkService
 final deepLinkServiceProvider = Provider<DeepLinkService>((ref) {
@@ -105,10 +109,55 @@ class WalletRetryStatus {
   }
 }
 
+/// Recovery options state for connection timeout/failure
+class ConnectionRecoveryState {
+  /// Whether to show recovery options UI
+  final bool showRecoveryOptions;
+
+  /// The WalletConnect URI for QR/copy functionality
+  final String? connectionUri;
+
+  /// The wallet type currently being connected
+  final WalletType? walletType;
+
+  /// Time when recovery options were shown
+  final DateTime? shownAt;
+
+  const ConnectionRecoveryState({
+    this.showRecoveryOptions = false,
+    this.connectionUri,
+    this.walletType,
+    this.shownAt,
+  });
+
+  ConnectionRecoveryState copyWith({
+    bool? showRecoveryOptions,
+    String? connectionUri,
+    WalletType? walletType,
+    DateTime? shownAt,
+  }) {
+    return ConnectionRecoveryState(
+      showRecoveryOptions: showRecoveryOptions ?? this.showRecoveryOptions,
+      connectionUri: connectionUri ?? this.connectionUri,
+      walletType: walletType ?? this.walletType,
+      shownAt: shownAt ?? this.shownAt,
+    );
+  }
+
+  /// Reset to initial state
+  static const empty = ConnectionRecoveryState();
+}
+
 /// Notifier for wallet operations (Riverpod 3.0 - extends Notifier)
 class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
   WalletService get _walletService => ref.read(walletServiceProvider);
   StreamSubscription<Uri>? _deepLinkSubscription;
+
+  /// Timer for approval timeout (shows recovery options after 15 seconds)
+  Timer? _approvalTimeoutTimer;
+
+  /// Duration before showing recovery options
+  static const _approvalTimeoutDuration = Duration(seconds: 15);
 
   @override
   AsyncValue<WalletEntity?> build() {
@@ -118,9 +167,39 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
     // Cleanup on dispose
     ref.onDispose(() {
       _deepLinkSubscription?.cancel();
+      _cancelApprovalTimeout();
     });
 
     return const AsyncValue.data(null);
+  }
+
+  /// Start approval timeout timer
+  void _startApprovalTimeout(WalletType walletType, String? uri) {
+    _cancelApprovalTimeout();
+
+    _approvalTimeoutTimer = Timer(_approvalTimeoutDuration, () {
+      AppLogger.wallet('Approval timeout reached, showing recovery options', data: {
+        'walletType': walletType.name,
+        'hasUri': uri != null,
+      });
+
+      // Update recovery state to show options
+      ref.read(connectionRecoveryProvider.notifier).showRecovery(
+        walletType: walletType,
+        connectionUri: uri,
+      );
+    });
+
+    AppLogger.wallet('Started approval timeout timer', data: {
+      'duration': _approvalTimeoutDuration.inSeconds,
+      'walletType': walletType.name,
+    });
+  }
+
+  /// Cancel approval timeout timer
+  void _cancelApprovalTimeout() {
+    _approvalTimeoutTimer?.cancel();
+    _approvalTimeoutTimer = null;
   }
 
   Future<void> _init() async {
@@ -145,6 +224,23 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
   }) async {
     state = const AsyncValue.loading();
 
+    // Reset recovery state at start of new connection
+    ref.read(connectionRecoveryProvider.notifier).reset();
+
+    // [Sentry] Track connection start
+    _sentry.trackWalletConnectionStart(
+      walletType: walletType.name,
+      chainId: chainId,
+      cluster: cluster,
+    );
+
+    // [WalletLogService] Start structured connection logging
+    WalletLogService.instance.startConnection(
+      walletType: walletType,
+      chainId: chainId,
+      cluster: cluster,
+    );
+
     // Use Completer to wait for final result from stream
     final completer = Completer<WalletEntity>();
     StreamSubscription<WalletConnectionStatus>? statusSubscription;
@@ -157,14 +253,33 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
         'hasError': status.hasError,
       });
 
+      // [Sentry] Add breadcrumb for status changes
+      _sentry.addBreadcrumb(
+        message: 'Connection status: ${status.state.name}',
+        category: 'wallet.connection',
+        data: {
+          'is_retrying': status.isRetrying,
+          'retry_count': status.retryCount,
+          'has_error': status.hasError,
+        },
+        level: status.hasError ? SentryLevel.warning : SentryLevel.info,
+      );
+
       if (status.isConnected && status.wallet != null) {
         // Final success - complete with wallet
+        // Cancel timeout and reset recovery state
+        _cancelApprovalTimeout();
+        ref.read(connectionRecoveryProvider.notifier).reset();
+
         if (!completer.isCompleted) {
           AppLogger.wallet('Stream: Connection successful, completing');
           completer.complete(status.wallet);
         }
       } else if (status.hasError && !status.isRetrying) {
         // Final error (not during retry) - complete with error
+        // Cancel timeout but keep recovery options visible for retry
+        _cancelApprovalTimeout();
+
         if (!completer.isCompleted) {
           AppLogger.wallet('Stream: Final error, completing with error');
           completer.completeError(
@@ -188,19 +303,58 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
           cluster: cluster,
         ).then((_) {
           // Success handled by stream
-        }).catchError((e) {
+        }).catchError((e, st) {
           // Log but don't propagate - stream is source of truth
           AppLogger.wallet('Connect method threw (stream is source of truth)', data: {
             'error': e.toString(),
           });
-          return null;
+          // Forward error to completer if not already completed
+          // This fixes the race condition where exception propagates before stream emits error
+          if (!completer.isCompleted) {
+            completer.completeError(e, st);
+          }
         }),
       );
 
+      // Get URI for recovery options (QR code / copy)
+      // Small delay to ensure URI is generated after connect() starts
+      Future.delayed(const Duration(milliseconds: 500), () async {
+        final uri = await _walletService.getConnectionUri();
+        if (uri != null && !completer.isCompleted) {
+          // Start approval timeout with URI for recovery
+          _startApprovalTimeout(walletType, uri);
+        }
+      });
+
       // Wait for result from stream
       final wallet = await completer.future;
+
+      // [Sentry] Track connection success
+      _sentry.trackWalletConnectionSuccess(
+        walletType: wallet.type.name,
+        address: wallet.address,
+        chainId: wallet.chainId,
+        cluster: wallet.cluster,
+      );
+
+      // [WalletLogService] End connection successfully
+      WalletLogService.instance.endConnection(success: true);
+
       state = AsyncValue.data(wallet);
     } catch (e, st) {
+      // [Sentry] Track connection failure
+      await _sentry.trackWalletConnectionFailure(
+        walletType: walletType.name,
+        error: e,
+        stackTrace: st,
+        errorStep: 'Stream completion',
+        chainId: chainId,
+        cluster: cluster,
+      );
+
+      // [WalletLogService] End connection with failure
+      WalletLogService.instance.endConnection(success: false);
+
       state = AsyncValue.error(e, st);
     } finally {
       await statusSubscription.cancel();
@@ -209,23 +363,66 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
 
   /// Disconnect from wallet
   Future<void> disconnect() async {
+    final currentWallet = state.value;
+
+    // [Sentry] Track disconnection
+    _sentry.trackWalletDisconnection(
+      walletType: currentWallet?.type.name ?? 'unknown',
+      address: currentWallet?.address,
+      reason: 'user_initiated',
+    );
+
     try {
       await _walletService.disconnect();
       state = const AsyncValue.data(null);
     } catch (e, st) {
+      // [Sentry] Capture disconnect error
+      await _sentry.captureException(
+        e,
+        stackTrace: st,
+        tags: {'error_type': 'wallet_disconnect'},
+      );
       state = AsyncValue.error(e, st);
     }
   }
 
   /// Switch chain
   Future<void> switchChain(int chainId) async {
+    final currentChainId = state.value?.chainId ?? 0;
+
     try {
       await _walletService.switchChain(chainId);
+
+      // [Sentry] Track chain switch success
+      _sentry.trackChainSwitch(
+        fromChainId: currentChainId,
+        toChainId: chainId,
+        success: true,
+      );
+
       // Update state with new chain ID if needed
       if (state.value != null) {
         state = AsyncValue.data(state.value!.copyWith(chainId: chainId));
       }
     } catch (e, st) {
+      // [Sentry] Track chain switch failure
+      _sentry.trackChainSwitch(
+        fromChainId: currentChainId,
+        toChainId: chainId,
+        success: false,
+        error: e.toString(),
+      );
+
+      await _sentry.captureException(
+        e,
+        stackTrace: st,
+        tags: {
+          'error_type': 'chain_switch',
+          'from_chain': currentChainId.toString(),
+          'to_chain': chainId.toString(),
+        },
+      );
+
       state = AsyncValue.error(e, st);
     }
   }
@@ -286,14 +483,6 @@ final supportedWalletsProvider = Provider<List<WalletInfo>>((ref) {
       iconUrl: WalletType.rabby.iconAsset,
       supportsEvm: true,
       supportsSolana: false,
-    ),
-    WalletInfo(
-      type: WalletType.okxWallet,
-      name: 'OKX Wallet',
-      description: 'Multi-chain crypto wallet',
-      iconUrl: WalletType.okxWallet.iconAsset,
-      supportsEvm: true,
-      supportsSolana: true,
     ),
     WalletInfo(
       type: WalletType.walletConnect,
@@ -384,6 +573,20 @@ class MultiWalletNotifier extends Notifier<MultiWalletState> {
       }
     });
 
+    // [Sentry] Track connection start
+    _sentry.trackWalletConnectionStart(
+      walletType: walletType.name,
+      chainId: chainId,
+      cluster: cluster,
+    );
+
+    // [WalletLogService] Start structured connection logging (MultiWallet)
+    WalletLogService.instance.startConnection(
+      walletType: walletType,
+      chainId: chainId,
+      cluster: cluster,
+    );
+
     try {
       // Start connection - don't await, stream is source of truth
       _walletService.connect(
@@ -392,10 +595,15 @@ class MultiWalletNotifier extends Notifier<MultiWalletState> {
         cluster: cluster,
       ).then((_) {
         // Success handled by stream
-      }).catchError((e) {
+      }).catchError((e, st) {
         AppLogger.wallet('Connect threw (stream is source of truth)', data: {
           'error': e.toString(),
         });
+        // Forward error to completer if not already completed
+        // This fixes the race condition where exception propagates before stream emits error
+        if (!completer.isCompleted) {
+          completer.completeError(e, st);
+        }
       });
 
       // Wait for result
@@ -431,14 +639,67 @@ class MultiWalletNotifier extends Notifier<MultiWalletState> {
         }
       }
 
+      // [Sentry] Track connection success
+      _sentry.trackWalletConnectionSuccess(
+        walletType: wallet.type.name,
+        address: wallet.address,
+        chainId: wallet.chainId,
+        cluster: wallet.cluster,
+      );
+
+      // [WalletLogService] End connection successfully (MultiWallet)
+      WalletLogService.instance.endConnection(success: true);
+
       AppLogger.wallet('Multi-wallet: Added wallet', data: {
         'id': realId,
         'type': wallet.type.name,
         'address': wallet.address,
         'totalWallets': state.totalCount,
       });
-    } catch (e) {
-      // Update temp entry with error
+    } catch (e, st) {
+      // Check if this is an expected failure (user behavior, not a bug)
+      // Expected failures: TIMEOUT, USER_REJECTED, USER_CANCELLED, CANCELLED
+      final isExpectedFailure = e is WalletException &&
+          WalletConstants.expectedFailureCodes.contains(e.code);
+
+      if (isExpectedFailure) {
+        // Expected failures - log locally but don't send to Sentry as error
+        // These are normal user behaviors (didn't approve in time, rejected, etc.)
+        AppLogger.wallet('Expected connection failure', data: {
+          'walletType': walletType.name,
+          'errorCode': (e as WalletException).code,
+          'message': e.message,
+        });
+
+        // Track as breadcrumb only (not as error event)
+        // This provides context for debugging without cluttering error reports
+        _sentry.addBreadcrumb(
+          message: 'Wallet connection expected failure: ${(e as WalletException).code}',
+          category: 'wallet.connection',
+          data: {
+            'wallet_type': walletType.name,
+            'error_code': e.code,
+            'chain_id': chainId,
+          },
+          level: SentryLevel.info,
+        );
+      } else {
+        // Unexpected failures - report to Sentry as error
+        // These are actual bugs or system issues that need investigation
+        await _sentry.trackWalletConnectionFailure(
+          walletType: walletType.name,
+          error: e,
+          stackTrace: st,
+          errorStep: 'MultiWallet connection',
+          chainId: chainId,
+          cluster: cluster,
+        );
+      }
+
+      // [WalletLogService] End connection with failure (MultiWallet)
+      WalletLogService.instance.endConnection(success: false);
+
+      // Update temp entry with error (for both expected and unexpected)
       state = state.updateWallet(tempId, (entry) {
         return entry.copyWith(
           status: WalletEntryStatus.error,
@@ -730,4 +991,68 @@ final requiredTransactionAddressProvider = Provider<String>((ref) {
     );
   }
   return address;
+});
+
+// ============================================================================
+// Connection Recovery State Management
+// ============================================================================
+
+/// Notifier for managing connection recovery options
+class ConnectionRecoveryNotifier extends Notifier<ConnectionRecoveryState> {
+  @override
+  ConnectionRecoveryState build() {
+    return ConnectionRecoveryState.empty;
+  }
+
+  /// Show recovery options with connection details
+  void showRecovery({
+    required WalletType walletType,
+    String? connectionUri,
+  }) {
+    state = ConnectionRecoveryState(
+      showRecoveryOptions: true,
+      connectionUri: connectionUri,
+      walletType: walletType,
+      shownAt: DateTime.now(),
+    );
+
+    AppLogger.wallet('Recovery options shown', data: {
+      'walletType': walletType.name,
+      'hasUri': connectionUri != null,
+    });
+  }
+
+  /// Hide recovery options and reset state
+  void reset() {
+    if (state.showRecoveryOptions) {
+      AppLogger.wallet('Recovery options reset');
+    }
+    state = ConnectionRecoveryState.empty;
+  }
+
+  /// Update connection URI (e.g., when it becomes available)
+  void updateUri(String uri) {
+    state = state.copyWith(connectionUri: uri);
+  }
+}
+
+/// Provider for connection recovery state
+final connectionRecoveryProvider =
+    NotifierProvider<ConnectionRecoveryNotifier, ConnectionRecoveryState>(
+  ConnectionRecoveryNotifier.new,
+);
+
+/// Provider for checking if recovery options should be shown
+final showRecoveryOptionsProvider = Provider<bool>((ref) {
+  return ref.watch(connectionRecoveryProvider).showRecoveryOptions;
+});
+
+/// Provider for recovery connection URI
+final recoveryConnectionUriProvider = Provider<String?>((ref) {
+  return ref.watch(connectionRecoveryProvider).connectionUri;
+});
+
+/// Provider for recovery wallet type
+final recoveryWalletTypeProvider = Provider<WalletType?>((ref) {
+  return ref.watch(connectionRecoveryProvider).walletType;
 });

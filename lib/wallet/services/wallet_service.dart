@@ -137,7 +137,6 @@ class WalletService {
       'wc': 'WalletConnect',
       'trust': 'Trust Wallet',
       'rabby': 'Rabby',
-      'okx': 'OKX Wallet',
       'coinbase': 'Coinbase',
     };
 

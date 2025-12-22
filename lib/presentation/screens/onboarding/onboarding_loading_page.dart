@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wallet_integration_practice/core/core.dart';
 import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
@@ -528,6 +530,11 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
                       // Status message
                       _buildStatusMessage(theme),
 
+                      const SizedBox(height: 16),
+
+                      // Recovery options (shown after 15s timeout)
+                      _buildRecoveryOptions(theme),
+
                       const Spacer(),
 
                       // Action buttons (for error state)
@@ -721,6 +728,183 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
     );
   }
 
+  /// Build recovery options UI
+  /// Shows when approval timeout is reached (15 seconds)
+  Widget _buildRecoveryOptions(ThemeData theme) {
+    final showRecovery = ref.watch(showRecoveryOptionsProvider);
+    final connectionUri = ref.watch(recoveryConnectionUriProvider);
+
+    // Only show during waiting approval step
+    if (!showRecovery || _currentStep != OnboardingStep.waitingApproval) {
+      return const SizedBox.shrink();
+    }
+
+    return AnimatedSize(
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: theme.colorScheme.outlineVariant,
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.help_outline,
+                  size: 20,
+                  color: theme.colorScheme.primary,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '승인 화면이 안 보이시나요?',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+
+            // QR Code option
+            if (connectionUri != null) ...[
+              _RecoveryOptionButton(
+                icon: Icons.qr_code_2,
+                label: 'QR 코드로 연결',
+                subtitle: '지갑 앱에서 스캔하세요',
+                onTap: () => _showQrCodeDialog(context, connectionUri),
+              ),
+              const SizedBox(height: 8),
+
+              // Copy URI option
+              _RecoveryOptionButton(
+                icon: Icons.copy,
+                label: '연결 URI 복사',
+                subtitle: '지갑 앱에 직접 붙여넣기',
+                onTap: () => _copyConnectionUri(connectionUri),
+              ),
+              const SizedBox(height: 8),
+            ],
+
+            // Retry option
+            _RecoveryOptionButton(
+              icon: Icons.refresh,
+              label: '다시 시도',
+              subtitle: '연결을 처음부터 다시 시작',
+              onTap: _retryConnection,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Show QR code dialog for connection
+  void _showQrCodeDialog(BuildContext context, String uri) {
+    final theme = Theme.of(context);
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.qr_code_2, color: theme.colorScheme.primary),
+            const SizedBox(width: 8),
+            const Text('QR 코드로 연결'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: QrImageView(
+                data: uri,
+                version: QrVersions.auto,
+                size: 200,
+                backgroundColor: Colors.white,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              '${widget.walletType.displayName} 앱에서\nQR 코드를 스캔하세요',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('닫기'),
+          ),
+          FilledButton.icon(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: uri));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('URI가 클립보드에 복사되었습니다'),
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            },
+            icon: const Icon(Icons.copy, size: 18),
+            label: const Text('URI 복사'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Copy connection URI to clipboard
+  void _copyConnectionUri(String uri) {
+    Clipboard.setData(ClipboardData(text: uri));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('연결 URI가 클립보드에 복사되었습니다'),
+        action: SnackBarAction(
+          label: '확인',
+          onPressed: () {},
+        ),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+  /// Retry connection from scratch
+  void _retryConnection() {
+    // Reset recovery state
+    ref.read(connectionRecoveryProvider.notifier).reset();
+
+    // Cancel current subscription
+    _connectionSubscription?.cancel();
+    _errorDelayTimer?.cancel();
+    _temporaryErrorCount = 0;
+
+    // Reset step and restart
+    setState(() => _currentStep = OnboardingStep.openingWallet);
+
+    // Re-initiate connection
+    _listenToConnectionStatus();
+    Future.delayed(const Duration(milliseconds: 300), () {
+      if (mounted) {
+        _initiateConnection();
+      }
+    });
+  }
+
   /// Check if the error is fatal and should immediately show error UI
   /// Temporary/recoverable errors should allow time for reconnection
   bool _isFatalConnectionError(String? errorMessage) {
@@ -757,8 +941,6 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
         return const Color(0xFF001F4D); // Rainbow dark blue
       case WalletType.walletConnect:
         return const Color(0xFF3B99FC); // WalletConnect blue
-      case WalletType.okxWallet:
-        return const Color(0xFF000000); // OKX black
     }
   }
 }
@@ -855,6 +1037,80 @@ class _StepItem extends StatelessWidget {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// Recovery option button for connection troubleshooting
+class _RecoveryOptionButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  const _RecoveryOptionButton({
+    required this.icon,
+    required this.label,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Material(
+      color: theme.colorScheme.surface,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primaryContainer,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(
+                  icon,
+                  size: 20,
+                  color: theme.colorScheme.primary,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      label,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    Text(
+                      subtitle,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(
+                Icons.chevron_right,
+                size: 20,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

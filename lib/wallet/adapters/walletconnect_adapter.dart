@@ -55,6 +55,21 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
   /// Getter for subclasses to access approval waiting state
   bool get isWaitingForApproval => _isWaitingForApproval;
 
+  /// Track background reconnection attempts to prevent infinite retries
+  /// Reset when approval completes or is cancelled
+  int _backgroundReconnectAttempts = 0;
+
+  /// Maximum number of background reconnection attempts allowed
+  /// Limits battery/resource usage while app is in background
+  static const int _maxBackgroundReconnectAttempts = 3;
+
+  /// Reset approval waiting state and background reconnection counter
+  /// Call this when approval completes, is cancelled, or connection succeeds/fails
+  void _resetApprovalState() {
+    _isWaitingForApproval = false;
+    _backgroundReconnectAttempts = 0;
+  }
+
   WalletConnectAdapter({WalletAdapterConfig? config})
       : _config = config ?? WalletAdapterConfig.defaultConfig();
 
@@ -165,16 +180,36 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
   /// Called when app lifecycle state changes (foreground/background)
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Update structured logging context
+    WalletLogService.instance.updateLifecycleState(state);
+
     AppLogger.wallet('App lifecycle state changed', data: {
       'state': state.name,
       'isWaitingForApproval': _isWaitingForApproval,
       'hasSession': _session != null,
     });
 
-    if (state == AppLifecycleState.resumed && _isWaitingForApproval) {
-      // App returned to foreground while waiting for wallet approval
-      // CRITICAL: Ensure relay is connected before checking session
-      _ensureRelayAndCheckSession();
+    if (state == AppLifecycleState.resumed) {
+      // Always check relay connection on resume
+      // Even if not waiting for approval, relay may have disconnected
+      AppLogger.wallet('App resumed, checking relay connection...');
+
+      // Force relay state refresh to detect zombie connections
+      _refreshRelayState();
+
+      // If relay disconnected and we're in any pending state, try reconnect
+      if (!_isRelayConnected && _appKit != null) {
+        AppLogger.wallet('Relay disconnected on resume, forcing reconnect...');
+        // Fire-and-forget reconnection - don't block lifecycle
+        unawaited(_appKit!.core.relayClient.connect());
+      }
+
+      // Existing logic for waiting approval
+      if (_isWaitingForApproval) {
+        // App returned to foreground while waiting for wallet approval
+        // CRITICAL: Ensure relay is connected before checking session
+        _ensureRelayAndCheckSession();
+      }
     }
   }
 
@@ -183,28 +218,57 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
   /// This is the critical path for handling app resume after wallet approval.
   /// The relay WebSocket may have disconnected while app was in background,
   /// so we must reconnect before checking for session updates.
+  ///
+  /// Key improvements:
+  /// 1. Resets _isReconnecting flag to allow fresh reconnection attempt
+  /// 2. Uses longer timeout (8s) since we're now in foreground
+  /// 3. Retries once if first attempt fails
   Future<void> _ensureRelayAndCheckSession() async {
     AppLogger.wallet('Ensuring relay connection before session check');
 
-    // 1. Refresh relay state to detect zombie connections
+    // 1. RESET reconnection state on app resume
+    //    This ensures we can retry even if a background reconnection was attempted
+    //    (which would have failed due to Android network restrictions)
+    _isReconnecting = false;
+
+    // 2. Refresh relay state to detect zombie connections
     _refreshRelayState();
 
-    // 2. Attempt relay reconnection if needed
-    if (!_isRelayConnected && !_isReconnecting) {
-      final relayReady = await ensureRelayConnected(
-        timeout: const Duration(seconds: 3),
+    // 3. Attempt relay reconnection with LONGER timeout for foreground
+    //    Android allows network in foreground, so we can use longer timeout
+    if (!_isRelayConnected) {
+      AppLogger.wallet('Relay disconnected, attempting foreground reconnection');
+
+      var relayReady = await ensureRelayConnected(
+        timeout: const Duration(seconds: 8), // Increased from 3s
       );
 
-      AppLogger.wallet('Relay reconnection on resume', data: {
+      AppLogger.wallet('Relay reconnection on resume (attempt 1)', data: {
         'success': relayReady,
       });
 
+      // 4. If first attempt fails, retry once more after short delay
       if (!relayReady) {
-        AppLogger.wallet('Relay reconnection failed on resume, continuing anyway...');
+        AppLogger.wallet('First reconnection failed, retrying after 500ms...');
+        await Future.delayed(const Duration(milliseconds: 500));
+
+        relayReady = await ensureRelayConnected(
+          timeout: const Duration(seconds: 5),
+        );
+
+        AppLogger.wallet('Relay reconnection on resume (attempt 2)', data: {
+          'success': relayReady,
+        });
+      }
+
+      if (!relayReady) {
+        AppLogger.wallet(
+          'Relay reconnection failed after retries, checking session anyway...',
+        );
       }
     }
 
-    // 3. Check for session
+    // 5. Check for session
     await checkConnectionOnResume();
   }
 
@@ -224,7 +288,7 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
     // 1. Session already established - clear flag and return
     if (_session != null) {
       AppLogger.wallet('Session already established, clearing approval flag');
-      _isWaitingForApproval = false;
+      _resetApprovalState();
       return;
     }
 
@@ -251,7 +315,7 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
         _parseSessionAccounts();
         _emitConnectionStatus();
         // Clear flag AFTER emitting status to ensure connection completes
-        _isWaitingForApproval = false;
+        _resetApprovalState();
         return;
       }
     }
@@ -272,12 +336,20 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
   void _onRelayConnect(dynamic _) {
     _isRelayConnected = true;
     AppLogger.wallet('Relay client connected');
+
+    // Update structured logging
+    WalletLogService.instance.updateRelayState(RelayState.connected);
+    WalletLogService.instance.logRelayEvent('connected');
   }
 
   /// Handle relay client disconnect event
   void _onRelayDisconnect(dynamic _) {
     _isRelayConnected = false;
     AppLogger.wallet('Relay client disconnected');
+
+    // Update structured logging
+    WalletLogService.instance.updateRelayState(RelayState.disconnected);
+    WalletLogService.instance.logRelayEvent('disconnected');
   }
 
   /// Handle relay client error event
@@ -306,6 +378,17 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
       'wasRelayConnected': _isRelayConnected,
     });
 
+    // Update structured logging with error details
+    WalletLogService.instance.updateRelayState(
+      RelayState.error,
+      errorMessage: errorMessage,
+    );
+    WalletLogService.instance.logRelayEvent(
+      'error',
+      errorMessage: errorMessage,
+      isReconnection: _isReconnecting,
+    );
+
     // CRITICAL FIX: Update relay state immediately on error
     // This prevents "zombie state" where cached state is true but relay is disconnected
     _isRelayConnected = false;
@@ -320,27 +403,95 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
   ///
   /// Uses a short delay to avoid immediate retry storms.
   /// Only one reconnection can be in progress at a time.
+  ///
+  /// IMPORTANT: Background reconnection policy:
+  /// - If NOT waiting for approval: Skip reconnection (handled on resume)
+  /// - If waiting for approval: Allow limited reconnection (max 3 attempts)
+  ///   This ensures wallet approval events are received even when app is backgrounded
   void _scheduleRelayReconnect() {
     if (_isReconnecting) {
       AppLogger.wallet('Relay reconnection already in progress, skipping');
       return;
     }
 
+    final lifecycleState = WidgetsBinding.instance.lifecycleState;
+    final isBackground = lifecycleState == AppLifecycleState.paused ||
+        lifecycleState == AppLifecycleState.inactive;
+
+    // Background handling with approval-aware logic
+    if (isBackground) {
+      // Case 1: Not waiting for approval - skip reconnection
+      if (!_isWaitingForApproval) {
+        AppLogger.wallet(
+          'Skipping reconnection while in background (state: ${lifecycleState?.name})',
+          data: {'reason': 'Not waiting for approval, will reconnect on resume'},
+        );
+        return;
+      }
+
+      // Case 2: Waiting for approval - allow limited reconnection
+      if (_backgroundReconnectAttempts >= _maxBackgroundReconnectAttempts) {
+        AppLogger.wallet(
+          'Max background reconnection attempts reached',
+          data: {
+            'attempts': _backgroundReconnectAttempts,
+            'max': _maxBackgroundReconnectAttempts,
+            'state': lifecycleState?.name,
+          },
+        );
+        return;
+      }
+
+      _backgroundReconnectAttempts++;
+      AppLogger.wallet(
+        'Background reconnection ALLOWED (waiting for approval)',
+        data: {
+          'attempt': _backgroundReconnectAttempts,
+          'max': _maxBackgroundReconnectAttempts,
+          'state': lifecycleState?.name,
+        },
+      );
+    }
+
     _isReconnecting = true;
     AppLogger.wallet('Scheduling relay reconnection in 500ms');
+
+    // Update structured logging
+    WalletLogService.instance.updateRelayState(
+      RelayState.reconnecting,
+      isReconnecting: true,
+    );
 
     Future.delayed(const Duration(milliseconds: 500), () async {
       try {
         final success = await ensureRelayConnected(
-          timeout: const Duration(seconds: 3),
+          timeout: const Duration(seconds: 10),
         );
         AppLogger.wallet('Scheduled relay reconnection result', data: {
           'success': success,
         });
+
+        // Update logging based on result
+        if (success) {
+          WalletLogService.instance.logRelayEvent(
+            'reconnection_success',
+            isReconnection: true,
+          );
+        } else {
+          WalletLogService.instance.logRelayEvent(
+            'reconnection_failed',
+            isReconnection: true,
+          );
+        }
       } catch (e) {
         AppLogger.wallet('Scheduled relay reconnection failed', data: {
           'error': e.toString(),
         });
+        WalletLogService.instance.logRelayEvent(
+          'reconnection_error',
+          errorMessage: e.toString(),
+          isReconnection: true,
+        );
       } finally {
         _isReconnecting = false;
       }
@@ -383,6 +534,13 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
   }) async {
     if (_appKit == null) {
       AppLogger.wallet('Cannot reconnect relay: AppKit not initialized');
+      return false;
+    }
+
+    // Defensive check: Skip if adapter is disposed
+    // This prevents StateError when StreamController is already closed
+    if (_connectionController.isClosed) {
+      AppLogger.wallet('Cannot reconnect relay: adapter already disposed');
       return false;
     }
 
@@ -519,6 +677,21 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
       _session = event.session;
       _parseSessionAccounts();
       _emitConnectionStatus();
+
+      // Update structured logging
+      WalletLogService.instance.updateSessionState(
+        WcSessionState.approved,
+        sessionTopic: event.session.topic,
+        peerName: event.session.peer?.metadata.name,
+      );
+      WalletLogService.instance.logSessionEvent(
+        'connected',
+        topic: event.session.topic,
+        peerName: event.session.peer?.metadata.name,
+        namespaces: event.session.namespaces.keys.toList(),
+        accountCount: _sessionAccounts.count,
+      );
+
       AppLogger.wallet('Session connected', data: {
         'address': connectedAddress,
         'accountCount': _sessionAccounts.count,
@@ -528,6 +701,13 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
   }
 
   void _onSessionDelete(SessionDelete? event) {
+    // Update structured logging before clearing session
+    WalletLogService.instance.updateSessionState(WcSessionState.deleted);
+    WalletLogService.instance.logSessionEvent(
+      'deleted',
+      topic: event?.topic,
+    );
+
     _session = null;
     _sessionAccounts = const SessionAccounts.empty();
     _requestedChainId = null;
@@ -538,6 +718,13 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
   /// Handle session events like accountsChanged and chainChanged
   void _onSessionEvent(SessionEvent? event) {
     if (event == null) return;
+
+    // Log session event in structured format
+    WalletLogService.instance.logSessionEvent(
+      event.name,
+      topic: event.topic,
+      extra: {'data': event.data?.toString()},
+    );
 
     AppLogger.wallet('Session event received', data: {
       'name': event.name,
@@ -559,6 +746,13 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
   /// Handle session update (namespace changes)
   void _onSessionUpdate(SessionUpdate? event) {
     if (event == null) return;
+
+    // Log session update in structured format
+    WalletLogService.instance.logSessionEvent(
+      'update',
+      topic: event.topic,
+      namespaces: event.namespaces.keys.toList(),
+    );
 
     AppLogger.wallet('Session update received', data: {
       'topic': event.topic,
@@ -837,7 +1031,7 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
       );
 
       _connectionController.add(WalletConnectionStatus.connected(wallet));
-      _isWaitingForApproval = false;
+      _resetApprovalState();
 
       AppLogger.wallet('Wallet connected via prepareConnection', data: {
         'address': wallet.address,
@@ -999,7 +1193,7 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
         _connectionController.add(WalletConnectionStatus.connected(wallet));
 
         // Connection successful - clear waiting flag
-        _isWaitingForApproval = false;
+        _resetApprovalState();
 
         AppLogger.wallet('Wallet connected', data: {
           'address': wallet.address,
@@ -1039,7 +1233,7 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
         }
 
         // Final failure - clear waiting flag
-        _isWaitingForApproval = false;
+        _resetApprovalState();
         AppLogger.e('Connection failed after $retryCount attempt(s)', e);
         _connectionController.add(WalletConnectionStatus.error(e.message));
         rethrow;
@@ -1047,7 +1241,7 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
       } catch (e) {
         // Unexpected error - clean up and clear waiting flag
         watchdogTimer?.cancel();
-        _isWaitingForApproval = false;
+        _resetApprovalState();
         AppLogger.e('Unexpected connection error', e);
         _connectionController.add(WalletConnectionStatus.error(e.toString()));
         rethrow;
@@ -1055,7 +1249,7 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
     }
 
     // Max retries exceeded - clear waiting flag
-    _isWaitingForApproval = false;
+    _resetApprovalState();
     const exception = WalletException(
       message: 'Max connection retries exceeded',
       code: 'MAX_RETRIES',
