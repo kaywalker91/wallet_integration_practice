@@ -18,6 +18,7 @@ import 'package:wallet_integration_practice/wallet/adapters/walletconnect_adapte
 enum OnboardingStep {
   openingWallet,
   waitingApproval,
+  signingIn, // SIWS: Sign In With Solana (Phantom only)
   verifying,
   complete,
   error,
@@ -25,18 +26,18 @@ enum OnboardingStep {
 
 /// Onboarding loading page displayed during wallet connection
 class OnboardingLoadingPage extends ConsumerStatefulWidget {
+  const OnboardingLoadingPage({
+    super.key,
+    required this.walletType,
+    this.isRestoring = false,
+  });
+
   final WalletType walletType;
 
   /// Whether this page is being restored from a pending connection state.
   /// When true, skips initiating a new connection and just waits for the
   /// existing WalletConnect session to complete.
   final bool isRestoring;
-
-  const OnboardingLoadingPage({
-    super.key,
-    required this.walletType,
-    this.isRestoring = false,
-  });
 
   @override
   ConsumerState<OnboardingLoadingPage> createState() =>
@@ -180,13 +181,13 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
   }
 
   /// Handle successful wallet connection
-  void _handleConnectionSuccess(WalletEntity wallet) {
+  Future<void> _handleConnectionSuccess(WalletEntity wallet) async {
     // Cancel any pending error timer - connection succeeded!
     _errorDelayTimer?.cancel();
     _temporaryErrorCount = 0;
 
     // Clear pending state
-    ref.read(pendingConnectionServiceProvider).clearPendingConnection();
+    await ref.read(pendingConnectionServiceProvider).clearPendingConnection();
 
     AppLogger.wallet('[Onboarding] Connection successful', data: {
       'address': wallet.address,
@@ -195,6 +196,25 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
 
     // Ensure state is synced before navigation
     ref.read(multiWalletNotifierProvider.notifier).registerWallet(wallet);
+
+    // SIWS: Phantom 지갑의 경우 서명 인증 수행
+    if (wallet.type == WalletType.phantom) {
+      setState(() => _currentStep = OnboardingStep.signingIn);
+
+      try {
+        final walletService = ref.read(walletServiceProvider);
+        final signature = await walletService.signInWithSolana(
+          domain: AppConstants.appDomain,
+          statement: 'iLity Hub 로그인을 확인해주세요.',
+        );
+        AppLogger.wallet('[Onboarding] SIWS completed', data: {
+          'signaturePreview': signature.length > 20 ? '${signature.substring(0, 20)}...' : signature,
+        });
+      } catch (e) {
+        // SIWS 실패해도 연결은 유지 (선택적 정책)
+        AppLogger.w('[Onboarding] SIWS failed (connection retained): $e');
+      }
+    }
 
     setState(() => _currentStep = OnboardingStep.verifying);
 
@@ -258,7 +278,7 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
           AppLogger.w('[Onboarding] Relay reconnection failed');
 
           // Clear pending state since we can't restore
-          ref.read(pendingConnectionServiceProvider).clearPendingConnection();
+          await ref.read(pendingConnectionServiceProvider).clearPendingConnection();
 
           if (mounted) {
             setState(() {
@@ -285,7 +305,7 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
         AppLogger.i('[Onboarding] Session restored successfully!');
 
         // Clear pending state
-        ref.read(pendingConnectionServiceProvider).clearPendingConnection();
+        await ref.read(pendingConnectionServiceProvider).clearPendingConnection();
 
         // Register wallet
         ref.read(multiWalletNotifierProvider.notifier).registerWallet(status.wallet!);
@@ -326,7 +346,7 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
       }
     } catch (e) {
       AppLogger.e('[Onboarding] Session restore error', e);
-      ref.read(pendingConnectionServiceProvider).clearPendingConnection();
+      await ref.read(pendingConnectionServiceProvider).clearPendingConnection();
 
       if (mounted) {
         setState(() {
@@ -422,6 +442,10 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
       WalletType.metamask: (
         WalletConstants.metamaskAppStoreId,
         WalletConstants.metamaskPackageAndroid
+      ),
+      WalletType.okxWallet: (
+        WalletConstants.okxWalletAppStoreId,
+        WalletConstants.okxWalletPackageAndroid
       ),
       WalletType.trustWallet: (
         WalletConstants.trustWalletAppStoreId,
@@ -635,10 +659,14 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
   }
 
   Widget _buildProgressStepper(ThemeData theme) {
+    // Phantom 지갑인 경우 SIWS 단계 포함
+    final isPhantom = widget.walletType == WalletType.phantom;
+
     final steps = [
       ('지갑 앱 열기', OnboardingStep.openingWallet),
       ('승인 대기', OnboardingStep.waitingApproval),
-      ('서명 검증', OnboardingStep.verifying),
+      if (isPhantom) ('서명 인증', OnboardingStep.signingIn),
+      ('연결 확인', OnboardingStep.verifying),
       ('연결 완료', OnboardingStep.complete),
     ];
 
@@ -671,6 +699,9 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
         break;
       case OnboardingStep.waitingApproval:
         message = '${widget.walletType.displayName}에서 연결을 승인해 주세요.';
+        break;
+      case OnboardingStep.signingIn:
+        message = '${widget.walletType.displayName}에서 서명을 승인해 주세요.';
         break;
       case OnboardingStep.verifying:
         message = '지갑 정보를 확인하는 중...';
@@ -933,6 +964,8 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
         return const Color(0xFFAB9FF2); // Phantom purple
       case WalletType.trustWallet:
         return const Color(0xFF3375BB); // Trust blue
+      case WalletType.okxWallet:
+        return const Color(0xFF1E6FE8); // OKX blue
       case WalletType.rabby:
         return const Color(0xFF8697FF); // Rabby purple
       case WalletType.coinbase:
@@ -947,12 +980,6 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
 
 /// Individual step item in the progress stepper
 class _StepItem extends StatelessWidget {
-  final String title;
-  final bool isCompleted;
-  final bool isCurrent;
-  final bool isError;
-  final bool isLast;
-
   const _StepItem({
     required this.title,
     required this.isCompleted,
@@ -960,6 +987,12 @@ class _StepItem extends StatelessWidget {
     required this.isError,
     required this.isLast,
   });
+
+  final String title;
+  final bool isCompleted;
+  final bool isCurrent;
+  final bool isError;
+  final bool isLast;
 
   @override
   Widget build(BuildContext context) {
@@ -1022,7 +1055,7 @@ class _StepItem extends StatelessWidget {
 
           // Status icon
           if (isCompleted)
-            Icon(
+            const Icon(
               Icons.check_circle,
               size: 20,
               color: Colors.green,
@@ -1044,17 +1077,17 @@ class _StepItem extends StatelessWidget {
 
 /// Recovery option button for connection troubleshooting
 class _RecoveryOptionButton extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String subtitle;
-  final VoidCallback onTap;
-
   const _RecoveryOptionButton({
     required this.icon,
     required this.label,
     required this.subtitle,
     required this.onTap,
   });
+
+  final IconData icon;
+  final String label;
+  final String subtitle;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {

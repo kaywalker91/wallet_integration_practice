@@ -11,6 +11,42 @@ iLity Hub를 위한 지갑 연동 실습
 
 ## 최근 변경 사항
 
+### 2025-12-23: Phantom 지갑 SIWS (Sign In With Solana) 자동 트리거 구현
+
+**기능**: Phantom 지갑 연결 시 자동으로 서명 인증(SIWS)을 수행하여 지갑 소유권을 암호학적으로 증명.
+
+**배경**:
+- 기존 구현: 연결(connect)만 수행 → `public_key` + `session` 수신
+- 문제점: 지갑 주소만 획득하고, 해당 지갑의 소유권 증명이 없음
+- 해결: 연결 성공 직후 `signInWithSolana()` 자동 호출
+
+**구현 내용**:
+1. **WalletService 확장**: `signInWithSolana()` 래퍼 메서드 추가
+2. **OnboardingLoadingPage 수정**:
+   - `signingIn` 단계 추가 (Phantom 전용)
+   - `_handleConnectionSuccess()`에서 SIWS 자동 트리거
+   - 진행률 UI 5단계로 확장 (Phantom만)
+3. **상수 추가**: `AppConstants.appDomain = 'ilityhub.com'`
+
+**사용자 경험 플로우 (Phantom)**:
+```
+[1] 지갑 앱 열기 → [2] 연결 승인 → [3] 서명 인증 🆕 → [4] 연결 확인 → [5] 완료
+                                    ↑
+                            Phantom 앱 재호출
+                            사용자 서명 승인
+```
+
+**정책**:
+- SIWS 실패해도 연결 유지 (선택적 정책)
+- 도메인: `ilityhub.com`
+
+**변경된 파일**:
+- `lib/wallet/services/wallet_service.dart` - `signInWithSolana()` 메서드 추가
+- `lib/presentation/screens/onboarding/onboarding_loading_page.dart` - SIWS 단계 및 자동 트리거
+- `lib/core/constants/app_constants.dart` - `appDomain` 상수 추가
+
+---
+
 ### 2025-12-23: OKX 지갑 무한 로딩 해결 - 낙관적 세션 확인 구현
 
 **문제**: OKX 지갑에서 승인 후 앱으로 돌아왔을 때 무한 로딩이 발생하는 문제.

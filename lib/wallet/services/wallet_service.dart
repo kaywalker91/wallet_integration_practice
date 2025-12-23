@@ -15,6 +15,11 @@ import 'package:wallet_integration_practice/wallet/services/wallet_adapter_facto
 /// The wallet decides which accounts to share, and this service
 /// manages which account is "active" for transactions.
 class WalletService {
+  WalletService({WalletAdapterConfig? config})
+      : _config = config ?? WalletAdapterConfig.defaultConfig() {
+    _setupDeepLinkHandlers();
+  }
+
   final WalletAdapterConfig _config;
   final Map<WalletType, BaseWalletAdapter> _adapters = {};
 
@@ -25,11 +30,6 @@ class WalletService {
   final _accountsChangedController = StreamController<SessionAccounts>.broadcast();
   StreamSubscription? _adapterSubscription;
   StreamSubscription? _accountsSubscription;
-
-  WalletService({WalletAdapterConfig? config})
-      : _config = config ?? WalletAdapterConfig.defaultConfig() {
-    _setupDeepLinkHandlers();
-  }
 
   /// Stream of wallet connection status
   Stream<WalletConnectionStatus> get connectionStream =>
@@ -136,6 +136,8 @@ class WalletService {
       'metamask': 'MetaMask',
       'wc': 'WalletConnect',
       'trust': 'Trust Wallet',
+      'okx': 'OKX Wallet',
+      'okxwallet': 'OKX Wallet',
       'rabby': 'Rabby',
       'coinbase': 'Coinbase',
     };
@@ -448,6 +450,47 @@ class WalletService {
     }
   }
 
+  /// Sign In With Solana (SIWS) for Phantom wallet
+  ///
+  /// Performs cryptographic signature verification to prove wallet ownership.
+  /// Only supported for Phantom adapter.
+  Future<String> signInWithSolana({
+    required String domain,
+    String? statement,
+  }) async {
+    if (_activeAdapter == null) {
+      throw const WalletException(
+        message: 'No wallet connected',
+        code: 'NOT_CONNECTED',
+      );
+    }
+
+    if (_activeAdapter is! PhantomAdapter) {
+      throw const WalletException(
+        message: 'SIWS is only supported for Phantom wallet',
+        code: 'UNSUPPORTED_WALLET',
+      );
+    }
+
+    try {
+      final phantomAdapter = _activeAdapter as PhantomAdapter;
+      final signature = await phantomAdapter.signInWithSolana(
+        domain: domain,
+        statement: statement ?? 'iLity Hub 로그인을 위해 서명해주세요.',
+      );
+
+      AppLogger.wallet('SIWS completed', data: {
+        'domain': domain,
+        'signaturePreview': signature.length > 20 ? '${signature.substring(0, 20)}...' : signature,
+      });
+
+      return signature;
+    } catch (e) {
+      AppLogger.e('SIWS failed', e);
+      rethrow;
+    }
+  }
+
   /// Sign typed data (EIP-712)
   Future<SignatureResult> signTypedData(TypedDataSignRequest request) async {
     if (_activeAdapter == null) {
@@ -503,6 +546,8 @@ class WalletService {
     } else if (host == 'trust' || path.contains('trust')) {
       // Trust Wallet uses WalletConnect, callback handled by WC session
       AppLogger.wallet('Trust Wallet deep link received', data: {'uri': uri.toString()});
+    } else if (host == 'okx' || host == 'okxwallet' || path.contains('okx')) {
+      AppLogger.wallet('OKX Wallet deep link received', data: {'uri': uri.toString()});
     } else {
       AppLogger.wallet('⚠️ Unhandled deep link', data: {'host': host, 'path': path});
     }
