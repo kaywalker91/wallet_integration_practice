@@ -8,6 +8,17 @@ library;
 ///
 /// Captures the strategy used and whether the launch was successful.
 class DeepLinkDispatchInfo {
+  const DeepLinkDispatchInfo({
+    required this.strategyName,
+    required this.scheme,
+    required this.launched,
+    this.packageName,
+    this.intentScheme,
+    this.exception,
+    this.strategyIndex,
+    this.totalStrategies,
+  });
+
   /// Name of the strategy used (e.g., "wc:// universal scheme")
   final String strategyName;
 
@@ -32,17 +43,6 @@ class DeepLinkDispatchInfo {
   /// Total number of strategies attempted
   final int? totalStrategies;
 
-  const DeepLinkDispatchInfo({
-    required this.strategyName,
-    required this.scheme,
-    required this.launched,
-    this.packageName,
-    this.intentScheme,
-    this.exception,
-    this.strategyIndex,
-    this.totalStrategies,
-  });
-
   /// Convert to a map for logging
   Map<String, dynamic> toMap() {
     return {
@@ -66,27 +66,6 @@ class DeepLinkDispatchInfo {
 /// This is the critical data for debugging deep link connection issues.
 /// Captures all details about the URI that the wallet app sent back.
 class DeepLinkReturnInfo {
-  /// The URI scheme (e.g., "wip", "metamask")
-  final String scheme;
-
-  /// The URI host
-  final String host;
-
-  /// The URI path
-  final String path;
-
-  /// Query parameters from the URI
-  final Map<String, String> queryParams;
-
-  /// Raw URI string (for debugging)
-  final String rawUri;
-
-  /// Timestamp when this return was received
-  final DateTime receivedAt;
-
-  /// Source app that sent this callback (if available)
-  final String? sourceApp;
-
   const DeepLinkReturnInfo({
     required this.scheme,
     required this.host,
@@ -110,6 +89,27 @@ class DeepLinkReturnInfo {
     );
   }
 
+  /// The URI scheme (e.g., "wip", "metamask")
+  final String scheme;
+
+  /// The URI host
+  final String host;
+
+  /// The URI path
+  final String path;
+
+  /// Query parameters from the URI
+  final Map<String, String> queryParams;
+
+  /// Raw URI string (for debugging)
+  final String rawUri;
+
+  /// Timestamp when this return was received
+  final DateTime receivedAt;
+
+  /// Source app that sent this callback (if available)
+  final String? sourceApp;
+
   /// Convert to a map for logging
   Map<String, dynamic> toMap() {
     return {
@@ -126,8 +126,8 @@ class DeepLinkReturnInfo {
   /// Redact sensitive parts of the URI for logging
   String _redactUri(String uri) {
     // Redact symKey if present
-    final symKeyPattern = RegExp(r'symKey=[^&]+');
-    var redacted = uri.replaceAll(symKeyPattern, 'symKey=[REDACTED]');
+    final symKeyPattern = RegExp('symKey=[^&]+');
+    final redacted = uri.replaceAll(symKeyPattern, 'symKey=[REDACTED]');
 
     // If URI is very long, truncate middle
     if (redacted.length > 200) {
@@ -146,24 +146,6 @@ class DeepLinkReturnInfo {
 /// Security-redacted version of the WC URI for logging.
 /// Does NOT include the symKey or full URI.
 class WcUriInfo {
-  /// Relay protocol (e.g., "irn")
-  final String relayProtocol;
-
-  /// WC protocol version (e.g., "2")
-  final String version;
-
-  /// Expiry timestamp (when the URI becomes invalid)
-  final DateTime? expiryTime;
-
-  /// Total length of the original URI
-  final int uriLength;
-
-  /// Methods requested in the URI
-  final List<String> methods;
-
-  /// Topic hash (redacted)
-  final String topicHash;
-
   const WcUriInfo({
     required this.relayProtocol,
     required this.version,
@@ -231,6 +213,24 @@ class WcUriInfo {
     }
   }
 
+  /// Relay protocol (e.g., "irn")
+  final String relayProtocol;
+
+  /// WC protocol version (e.g., "2")
+  final String version;
+
+  /// Expiry timestamp (when the URI becomes invalid)
+  final DateTime? expiryTime;
+
+  /// Total length of the original URI
+  final int uriLength;
+
+  /// Methods requested in the URI
+  final List<String> methods;
+
+  /// Topic hash (redacted)
+  final String topicHash;
+
   /// Convert to a map for logging
   Map<String, dynamic> toMap() {
     return {
@@ -249,6 +249,16 @@ class WcUriInfo {
 
 /// Relay event information for logging
 class RelayEventInfo {
+  const RelayEventInfo({
+    required this.eventType,
+    this.relayUrl,
+    this.errorCode,
+    this.errorMessage,
+    this.isReconnection = false,
+    this.attemptNumber,
+    required this.timestamp,
+  });
+
   /// Event type (connect, disconnect, error)
   final String eventType;
 
@@ -270,16 +280,6 @@ class RelayEventInfo {
   /// Timestamp of the event
   final DateTime timestamp;
 
-  const RelayEventInfo({
-    required this.eventType,
-    this.relayUrl,
-    this.errorCode,
-    this.errorMessage,
-    this.isReconnection = false,
-    this.attemptNumber,
-    required this.timestamp,
-  });
-
   /// Convert to a map for logging
   Map<String, dynamic> toMap() {
     return {
@@ -296,6 +296,17 @@ class RelayEventInfo {
 
 /// Session event information for logging
 class SessionEventInfo {
+  const SessionEventInfo({
+    required this.eventType,
+    this.topicHash,
+    this.peerName,
+    this.namespaces,
+    this.accountCount,
+    this.chainId,
+    required this.timestamp,
+    this.extra,
+  });
+
   /// Event type (connect, delete, update, event)
   final String eventType;
 
@@ -320,17 +331,6 @@ class SessionEventInfo {
   /// Additional event-specific data
   final Map<String, dynamic>? extra;
 
-  const SessionEventInfo({
-    required this.eventType,
-    this.topicHash,
-    this.peerName,
-    this.namespaces,
-    this.accountCount,
-    this.chainId,
-    required this.timestamp,
-    this.extra,
-  });
-
   /// Convert to a map for logging
   Map<String, dynamic> toMap() {
     return {
@@ -350,6 +350,20 @@ class SessionEventInfo {
 ///
 /// Comprehensive information logged when approval times out.
 class ApprovalTimeoutDiagnostics {
+  const ApprovalTimeoutDiagnostics({
+    required this.connectionId,
+    required this.walletType,
+    required this.relayState,
+    required this.sessionState,
+    this.lifecycleState,
+    required this.isReconnecting,
+    required this.deepLinkDispatched,
+    required this.deepLinkReturnReceived,
+    required this.elapsedMs,
+    required this.timeoutMs,
+    this.pendingRelayError,
+  });
+
   /// Connection ID for correlation
   final String connectionId;
 
@@ -382,20 +396,6 @@ class ApprovalTimeoutDiagnostics {
 
   /// Any pending relay errors
   final String? pendingRelayError;
-
-  const ApprovalTimeoutDiagnostics({
-    required this.connectionId,
-    required this.walletType,
-    required this.relayState,
-    required this.sessionState,
-    this.lifecycleState,
-    required this.isReconnecting,
-    required this.deepLinkDispatched,
-    required this.deepLinkReturnReceived,
-    required this.elapsedMs,
-    required this.timeoutMs,
-    this.pendingRelayError,
-  });
 
   /// Convert to a map for logging
   Map<String, dynamic> toMap() {

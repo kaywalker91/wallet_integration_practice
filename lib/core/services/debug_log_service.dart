@@ -5,16 +5,6 @@ import 'package:sentry_flutter/sentry_flutter.dart';
 ///
 /// beforeSend 콜백에서 인터셉트된 Sentry 이벤트를 로컬에서 확인하기 위해 사용됩니다.
 class DebugLogEntry {
-  final String id;
-  final DateTime timestamp;
-  final String level;
-  final String? exceptionType;
-  final String? exceptionValue;
-  final String? culprit;
-  final Map<String, dynamic>? tags;
-  final Map<String, dynamic>? contexts;
-  final List<String>? breadcrumbs;
-
   DebugLogEntry({
     required this.id,
     required this.timestamp,
@@ -62,6 +52,16 @@ class DebugLogEntry {
       breadcrumbs: breadcrumbsList,
     );
   }
+
+  final String id;
+  final DateTime timestamp;
+  final String level;
+  final String? exceptionType;
+  final String? exceptionValue;
+  final String? culprit;
+  final Map<String, dynamic>? tags;
+  final Map<String, dynamic>? contexts;
+  final List<String>? breadcrumbs;
 
   @override
   String toString() {

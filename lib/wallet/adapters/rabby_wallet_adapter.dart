@@ -213,7 +213,7 @@ class RabbyWalletAdapter extends WalletConnectAdapter {
 
   @override
   bool isSessionValid(SessionData session) {
-    final name = session.peer?.metadata.name.toLowerCase() ?? '';
+    final name = session.peer.metadata.name.toLowerCase();
     final isValid = name.contains('rabby');
     if (!isValid) {
       AppLogger.d('RabbyWalletAdapter ignored session for: $name');

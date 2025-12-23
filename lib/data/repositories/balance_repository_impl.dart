@@ -13,13 +13,6 @@ import 'package:wallet_integration_practice/domain/repositories/balance_reposito
 
 /// Implementation of BalanceRepository
 class BalanceRepositoryImpl implements BalanceRepository {
-  final EvmBalanceDataSource _evmDataSource;
-  final SolanaBalanceDataSource _solanaDataSource;
-  final BalanceCacheDataSource _cacheDataSource;
-
-  /// Stream controllers for balance watching
-  final Map<String, StreamController<NativeBalanceEntity>> _watchControllers = {};
-
   BalanceRepositoryImpl({
     required EvmBalanceDataSource evmDataSource,
     required SolanaBalanceDataSource solanaDataSource,
@@ -27,6 +20,13 @@ class BalanceRepositoryImpl implements BalanceRepository {
   })  : _evmDataSource = evmDataSource,
         _solanaDataSource = solanaDataSource,
         _cacheDataSource = cacheDataSource;
+
+  final EvmBalanceDataSource _evmDataSource;
+  final SolanaBalanceDataSource _solanaDataSource;
+  final BalanceCacheDataSource _cacheDataSource;
+
+  /// Stream controllers for balance watching
+  final Map<String, StreamController<NativeBalanceEntity>> _watchControllers = {};
 
   @override
   Future<Either<Failure, NativeBalanceEntity>> getNativeBalance({

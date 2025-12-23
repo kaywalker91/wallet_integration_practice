@@ -3,13 +3,6 @@ import 'package:wallet_integration_practice/core/constants/chain_constants.dart'
 
 /// Native token balance (ETH, MATIC, BNB, SOL, etc.)
 class NativeBalanceEntity extends Equatable {
-  final String address;
-  final ChainInfo chain;
-  final BigInt balanceWei;
-  final double balanceFormatted;
-  final DateTime fetchedAt;
-  final String? error;
-
   const NativeBalanceEntity({
     required this.address,
     required this.chain,
@@ -18,6 +11,13 @@ class NativeBalanceEntity extends Equatable {
     required this.fetchedAt,
     this.error,
   });
+
+  final String address;
+  final ChainInfo chain;
+  final BigInt balanceWei;
+  final double balanceFormatted;
+  final DateTime fetchedAt;
+  final String? error;
 
   /// Check if balance has error
   bool get hasError => error != null;
@@ -55,13 +55,6 @@ class NativeBalanceEntity extends Equatable {
 
 /// Token info for ERC-20/SPL tokens
 class TokenEntity extends Equatable {
-  final String contractAddress;
-  final String symbol;
-  final String name;
-  final int decimals;
-  final String? iconUrl;
-  final ChainType chainType;
-
   const TokenEntity({
     required this.contractAddress,
     required this.symbol,
@@ -70,6 +63,13 @@ class TokenEntity extends Equatable {
     this.iconUrl,
     required this.chainType,
   });
+
+  final String contractAddress;
+  final String symbol;
+  final String name;
+  final int decimals;
+  final String? iconUrl;
+  final ChainType chainType;
 
   /// Create a copy with updated values
   TokenEntity copyWith({
@@ -96,14 +96,6 @@ class TokenEntity extends Equatable {
 
 /// Token balance with metadata
 class TokenBalanceEntity extends Equatable {
-  final TokenEntity token;
-  final String ownerAddress;
-  final ChainInfo chain;
-  final BigInt balanceRaw;
-  final double balanceFormatted;
-  final DateTime fetchedAt;
-  final String? error;
-
   const TokenBalanceEntity({
     required this.token,
     required this.ownerAddress,
@@ -113,6 +105,14 @@ class TokenBalanceEntity extends Equatable {
     required this.fetchedAt,
     this.error,
   });
+
+  final TokenEntity token;
+  final String ownerAddress;
+  final ChainInfo chain;
+  final BigInt balanceRaw;
+  final double balanceFormatted;
+  final DateTime fetchedAt;
+  final String? error;
 
   /// Check if balance has error
   bool get hasError => error != null;
@@ -152,17 +152,17 @@ class TokenBalanceEntity extends Equatable {
 
 /// Aggregated balance for a wallet across chains
 class AggregatedBalanceEntity extends Equatable {
-  final String address;
-  final List<NativeBalanceEntity> nativeBalances;
-  final List<TokenBalanceEntity> tokenBalances;
-  final DateTime lastUpdated;
-
   const AggregatedBalanceEntity({
     required this.address,
     required this.nativeBalances,
     required this.tokenBalances,
     required this.lastUpdated,
   });
+
+  final String address;
+  final List<NativeBalanceEntity> nativeBalances;
+  final List<TokenBalanceEntity> tokenBalances;
+  final DateTime lastUpdated;
 
   /// Get native balance for specific chain
   NativeBalanceEntity? getBalanceForChain(ChainInfo chain) {

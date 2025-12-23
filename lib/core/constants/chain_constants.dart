@@ -36,16 +36,6 @@ enum ChainType {
 
 /// Supported blockchain network
 class ChainInfo {
-  final int? chainId; // For EVM chains
-  final String? cluster; // For non-EVM chains
-  final String name;
-  final String symbol;
-  final String rpcUrl;
-  final String? explorerUrl;
-  final ChainType type;
-  final bool isTestnet;
-  final String? iconUrl;
-
   const ChainInfo({
     this.chainId,
     this.cluster,
@@ -57,6 +47,16 @@ class ChainInfo {
     this.isTestnet = false,
     this.iconUrl,
   });
+
+  final int? chainId; // For EVM chains
+  final String? cluster; // For non-EVM chains
+  final String name;
+  final String symbol;
+  final String rpcUrl;
+  final String? explorerUrl;
+  final ChainType type;
+  final bool isTestnet;
+  final String? iconUrl;
 
   String get identifier => chainId?.toString() ?? cluster ?? name;
 

@@ -19,7 +19,7 @@ dependencies:
   riverpod_annotation: ^3.0.3
 
   # WalletConnect & Web3
-  reown_appkit: ^1.7.0
+  reown_appkit: ^1.7.6
   web3dart: ^2.7.3
 
   # Solana

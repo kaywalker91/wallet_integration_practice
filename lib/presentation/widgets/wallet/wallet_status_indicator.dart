@@ -5,16 +5,16 @@ import 'package:wallet_integration_practice/domain/entities/connected_wallet_ent
 ///
 /// Shows a colored dot with status text based on [WalletEntryStatus].
 class WalletStatusIndicator extends StatelessWidget {
-  final WalletEntryStatus status;
-  final bool showText;
-  final bool compact;
-
   const WalletStatusIndicator({
     super.key,
     required this.status,
     this.showText = true,
     this.compact = false,
   });
+
+  final WalletEntryStatus status;
+  final bool showText;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {

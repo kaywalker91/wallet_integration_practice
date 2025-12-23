@@ -6,6 +6,17 @@ import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
 
 /// Hero-style card displaying connected wallet information with integrated actions
 class WalletCard extends StatelessWidget {
+  const WalletCard({
+    super.key,
+    required this.wallet,
+    this.onDisconnect,
+    this.onSwitchChain,
+    this.balance,
+    this.tokenSymbol,
+    this.onSignMessage,
+    this.onSendTransaction,
+  });
+
   final WalletEntity wallet;
   final VoidCallback? onDisconnect;
   final VoidCallback? onSwitchChain;
@@ -22,23 +33,12 @@ class WalletCard extends StatelessWidget {
   /// Callback for sending a transaction (null = disabled/coming soon)
   final VoidCallback? onSendTransaction;
 
-  const WalletCard({
-    super.key,
-    required this.wallet,
-    this.onDisconnect,
-    this.onSwitchChain,
-    this.balance,
-    this.tokenSymbol,
-    this.onSignMessage,
-    this.onSendTransaction,
-  });
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
-    return Container(
+    return DecoratedBox(
       decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topLeft,
@@ -362,17 +362,17 @@ class WalletCard extends StatelessWidget {
 }
 
 class _AnimatedBalanceText extends StatelessWidget {
-  final double value;
-  final String? tokenSymbol;
-  final TextStyle? style;
-  final TextStyle? symbolStyle;
-
   const _AnimatedBalanceText({
     required this.value,
     this.tokenSymbol,
     this.style,
     this.symbolStyle,
   });
+
+  final double value;
+  final String? tokenSymbol;
+  final TextStyle? style;
+  final TextStyle? symbolStyle;
 
   @override
   Widget build(BuildContext context) {
@@ -429,12 +429,6 @@ class _AnimatedBalanceText extends StatelessWidget {
 
 /// Action button for wallet card
 class _ActionButton extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final VoidCallback? onPressed;
-  final bool isPrimary;
-  final bool isDisabled;
-
   const _ActionButton({
     required this.icon,
     required this.label,
@@ -442,6 +436,12 @@ class _ActionButton extends StatelessWidget {
     this.isPrimary = false,
     this.isDisabled = false,
   });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback? onPressed;
+  final bool isPrimary;
+  final bool isDisabled;
 
   @override
   Widget build(BuildContext context) {

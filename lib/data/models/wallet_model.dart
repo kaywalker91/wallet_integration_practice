@@ -3,14 +3,6 @@ import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
 
 /// Wallet data model for persistence
 class WalletModel {
-  final String address;
-  final String walletType;
-  final int? chainId;
-  final String? cluster;
-  final String? sessionTopic;
-  final DateTime connectedAt;
-  final Map<String, dynamic>? metadata;
-
   const WalletModel({
     required this.address,
     required this.walletType,
@@ -33,6 +25,27 @@ class WalletModel {
       metadata: json['metadata'] as Map<String, dynamic>?,
     );
   }
+
+  /// Create from entity
+  factory WalletModel.fromEntity(WalletEntity entity) {
+    return WalletModel(
+      address: entity.address,
+      walletType: entity.type.name,
+      chainId: entity.chainId,
+      cluster: entity.cluster,
+      sessionTopic: entity.sessionTopic,
+      connectedAt: entity.connectedAt,
+      metadata: entity.metadata,
+    );
+  }
+
+  final String address;
+  final String walletType;
+  final int? chainId;
+  final String? cluster;
+  final String? sessionTopic;
+  final DateTime connectedAt;
+  final Map<String, dynamic>? metadata;
 
   /// Convert to JSON
   Map<String, dynamic> toJson() {
@@ -57,19 +70,6 @@ class WalletModel {
       sessionTopic: sessionTopic,
       connectedAt: connectedAt,
       metadata: metadata,
-    );
-  }
-
-  /// Create from entity
-  factory WalletModel.fromEntity(WalletEntity entity) {
-    return WalletModel(
-      address: entity.address,
-      walletType: entity.type.name,
-      chainId: entity.chainId,
-      cluster: entity.cluster,
-      sessionTopic: entity.sessionTopic,
-      connectedAt: entity.connectedAt,
-      metadata: entity.metadata,
     );
   }
 

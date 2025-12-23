@@ -2,15 +2,6 @@ import 'package:wallet_integration_practice/core/constants/app_constants.dart';
 
 /// Configuration for wallet adapters
 class WalletAdapterConfig {
-  final String projectId;
-  final String appName;
-  final String appDescription;
-  final String appUrl;
-  final String appIcon;
-  final List<int> supportedChainIds;
-  final List<String> supportedMethods;
-  final List<String> supportedEvents;
-
   const WalletAdapterConfig({
     required this.projectId,
     required this.appName,
@@ -77,4 +68,13 @@ class WalletAdapterConfig {
       ],
     );
   }
+
+  final String projectId;
+  final String appName;
+  final String appDescription;
+  final String appUrl;
+  final String appIcon;
+  final List<int> supportedChainIds;
+  final List<String> supportedMethods;
+  final List<String> supportedEvents;
 }

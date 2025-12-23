@@ -38,12 +38,13 @@ import 'sentry_service.dart';
 /// WalletLogService.instance.endConnection(success: true);
 /// ```
 class WalletLogService {
+  WalletLogService._();
+
   static WalletLogService? _instance;
 
   /// Singleton instance
   static WalletLogService get instance => _instance ??= WalletLogService._();
 
-  WalletLogService._();
 
   /// Current connection context (null when no connection in progress)
   WalletLogContext? _context;
@@ -625,17 +626,6 @@ enum WalletLogEventType {
 
 /// Wallet log event for streaming
 class WalletLogEvent {
-  final WalletLogEventType type;
-  final WalletConnectionStep? step;
-  final WalletConnectionStep? previousStep;
-  final RelayState? relayState;
-  final RelayState? previousRelayState;
-  final WcSessionState? sessionState;
-  final WcSessionState? previousSessionState;
-  final DeepLinkReturnInfo? deepLinkReturn;
-  final WalletLogContext? context;
-  final ApprovalTimeoutDiagnostics? timeoutDiagnostics;
-
   const WalletLogEvent({
     required this.type,
     this.step,
@@ -648,16 +638,21 @@ class WalletLogEvent {
     this.context,
     this.timeoutDiagnostics,
   });
+
+  final WalletLogEventType type;
+  final WalletConnectionStep? step;
+  final WalletConnectionStep? previousStep;
+  final RelayState? relayState;
+  final RelayState? previousRelayState;
+  final WcSessionState? sessionState;
+  final WcSessionState? previousSessionState;
+  final DeepLinkReturnInfo? deepLinkReturn;
+  final WalletLogContext? context;
+  final ApprovalTimeoutDiagnostics? timeoutDiagnostics;
 }
 
 /// Extended log entry for wallet-specific logs
 class WalletDebugLogEntry extends DebugLogEntry {
-  final String message;
-  final Map<String, dynamic> context;
-  final String? connectionId;
-  final String? walletType;
-  final String? step;
-
   WalletDebugLogEntry({
     required super.id,
     required super.timestamp,
@@ -671,6 +666,12 @@ class WalletDebugLogEntry extends DebugLogEntry {
           exceptionType: 'WalletLog',
           exceptionValue: message,
         );
+
+  final String message;
+  final Map<String, dynamic> context;
+  final String? connectionId;
+  final String? walletType;
+  final String? step;
 
   @override
   String toString() {

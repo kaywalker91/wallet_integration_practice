@@ -14,6 +14,8 @@ import 'package:wallet_integration_practice/wallet/adapters/base_wallet_adapter.
 import 'package:wallet_integration_practice/wallet/models/wallet_adapter_config.dart';
 
 class CoinbaseWalletAdapter extends EvmWalletAdapter {
+  CoinbaseWalletAdapter({required this.config});
+
   final WalletAdapterConfig config;
   final _connectionController = StreamController<WalletConnectionStatus>.broadcast();
 
@@ -21,8 +23,6 @@ class CoinbaseWalletAdapter extends EvmWalletAdapter {
   WalletEntity? _connectedWallet;
   String? _currentAddress;
   int _currentChainId = 1; // Default to mainnet
-
-  CoinbaseWalletAdapter({required this.config});
 
   @override
   WalletType get walletType => WalletType.coinbase;

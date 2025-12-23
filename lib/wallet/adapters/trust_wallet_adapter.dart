@@ -119,12 +119,12 @@ class TrustWalletAdapter extends WalletConnectAdapter {
       });
 
       // Track in Sentry as warning (not error) since this is recoverable
-      SentryService.instance.captureException(
+      unawaited(SentryService.instance.captureException(
         e,
         stackTrace: st,
         level: SentryLevel.warning,
         tags: {'error_type': 'trust_callback_relay', 'wallet_type': 'trust'},
-      );
+      ));
     } finally {
       _isProcessingCallback = false;
     }

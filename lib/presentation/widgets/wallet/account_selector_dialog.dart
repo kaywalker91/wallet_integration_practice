@@ -29,7 +29,7 @@ class AccountSelectorDialog extends ConsumerWidget {
     final activeAddress = ref.watch(activeAccountAddressProvider);
     final theme = Theme.of(context);
 
-    return Container(
+    return DecoratedBox(
       decoration: BoxDecoration(
         color: theme.scaffoldBackgroundColor,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
@@ -124,15 +124,15 @@ class AccountSelectorDialog extends ConsumerWidget {
 }
 
 class _AccountTile extends StatelessWidget {
-  final SessionAccount account;
-  final bool isActive;
-  final VoidCallback onTap;
-
   const _AccountTile({
     required this.account,
     required this.isActive,
     required this.onTap,
   });
+
+  final SessionAccount account;
+  final bool isActive;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -145,8 +145,8 @@ class _AccountTile extends StatelessWidget {
         height: 48,
         decoration: BoxDecoration(
           color: isActive
-              ? theme.primaryColor.withOpacity(0.1)
-              : Colors.grey.withOpacity(0.1),
+              ? theme.primaryColor.withValues(alpha: 0.1)
+              : Colors.grey.withValues(alpha: 0.1),
           borderRadius: BorderRadius.circular(12),
           border: isActive
               ? Border.all(color: theme.primaryColor, width: 2)
@@ -241,9 +241,9 @@ class _AccountTile extends StatelessWidget {
 }
 
 class _ChainBadge extends StatelessWidget {
-  final String chainId;
-
   const _ChainBadge({required this.chainId});
+
+  final String chainId;
 
   @override
   Widget build(BuildContext context) {
@@ -252,9 +252,9 @@ class _ChainBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(
-        color: chainInfo.color.withOpacity(0.1),
+        color: chainInfo.color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: chainInfo.color.withOpacity(0.3)),
+        border: Border.all(color: chainInfo.color.withValues(alpha: 0.3)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -304,10 +304,10 @@ class _ChainBadge extends StatelessWidget {
 }
 
 class _ChainInfo {
+  _ChainInfo(this.name, this.color);
+
   final String name;
   final Color color;
-
-  _ChainInfo(this.name, this.color);
 }
 
 /// Compact account selector button for app bars or headers.
@@ -331,10 +331,10 @@ class AccountSelectorButton extends ConsumerWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          color: Theme.of(context).primaryColor.withOpacity(0.1),
+          color: Theme.of(context).primaryColor.withValues(alpha: 0.1),
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
-            color: Theme.of(context).primaryColor.withOpacity(0.3),
+            color: Theme.of(context).primaryColor.withValues(alpha: 0.3),
           ),
         ),
         child: Row(

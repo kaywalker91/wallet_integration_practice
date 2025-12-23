@@ -10,10 +10,10 @@ typedef DeepLinkCallback = Future<void> Function(Uri uri);
 
 /// Service for handling deep links from wallet apps
 class DeepLinkService {
+  DeepLinkService._();
+
   static DeepLinkService? _instance;
   static DeepLinkService get instance => _instance ??= DeepLinkService._();
-
-  DeepLinkService._();
 
   final AppLinks _appLinks = AppLinks();
   StreamSubscription<Uri>? _linkSubscription;
@@ -210,18 +210,18 @@ class DeepLinkService {
 
 /// Error information for deep link handling failures
 class DeepLinkError {
-  final String handlerKey;
-  final Uri uri;
-  final Object error;
-  final String message;
-  final DateTime timestamp;
-
   DeepLinkError({
     required this.handlerKey,
     required this.uri,
     required this.error,
     required this.message,
   }) : timestamp = DateTime.now();
+
+  final String handlerKey;
+  final Uri uri;
+  final Object error;
+  final String message;
+  final DateTime timestamp;
 
   @override
   String toString() => 'DeepLinkError(handler: $handlerKey, message: $message)';

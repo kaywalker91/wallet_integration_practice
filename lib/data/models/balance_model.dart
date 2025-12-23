@@ -3,13 +3,6 @@ import 'package:wallet_integration_practice/domain/entities/balance_entity.dart'
 
 /// Native balance data model for persistence/caching
 class NativeBalanceModel {
-  final String address;
-  final String chainIdentifier;
-  final String balanceWei;
-  final double balanceFormatted;
-  final DateTime fetchedAt;
-  final String? error;
-
   const NativeBalanceModel({
     required this.address,
     required this.chainIdentifier,
@@ -30,6 +23,25 @@ class NativeBalanceModel {
       error: json['error'] as String?,
     );
   }
+
+  /// Create from entity
+  factory NativeBalanceModel.fromEntity(NativeBalanceEntity entity) {
+    return NativeBalanceModel(
+      address: entity.address,
+      chainIdentifier: entity.chain.identifier,
+      balanceWei: entity.balanceWei.toString(),
+      balanceFormatted: entity.balanceFormatted,
+      fetchedAt: entity.fetchedAt,
+      error: entity.error,
+    );
+  }
+
+  final String address;
+  final String chainIdentifier;
+  final String balanceWei;
+  final double balanceFormatted;
+  final DateTime fetchedAt;
+  final String? error;
 
   /// Convert to JSON
   Map<String, dynamic> toJson() {
@@ -54,29 +66,10 @@ class NativeBalanceModel {
       error: error,
     );
   }
-
-  /// Create from entity
-  factory NativeBalanceModel.fromEntity(NativeBalanceEntity entity) {
-    return NativeBalanceModel(
-      address: entity.address,
-      chainIdentifier: entity.chain.identifier,
-      balanceWei: entity.balanceWei.toString(),
-      balanceFormatted: entity.balanceFormatted,
-      fetchedAt: entity.fetchedAt,
-      error: entity.error,
-    );
-  }
 }
 
 /// Token data model for persistence
 class TokenModel {
-  final String contractAddress;
-  final String symbol;
-  final String name;
-  final int decimals;
-  final String? iconUrl;
-  final String chainType;
-
   const TokenModel({
     required this.contractAddress,
     required this.symbol,
@@ -97,6 +90,25 @@ class TokenModel {
       chainType: json['chainType'] as String,
     );
   }
+
+  /// Create from entity
+  factory TokenModel.fromEntity(TokenEntity entity) {
+    return TokenModel(
+      contractAddress: entity.contractAddress,
+      symbol: entity.symbol,
+      name: entity.name,
+      decimals: entity.decimals,
+      iconUrl: entity.iconUrl,
+      chainType: entity.chainType.name,
+    );
+  }
+
+  final String contractAddress;
+  final String symbol;
+  final String name;
+  final int decimals;
+  final String? iconUrl;
+  final String chainType;
 
   /// Convert to JSON
   Map<String, dynamic> toJson() {
@@ -124,30 +136,10 @@ class TokenModel {
       ),
     );
   }
-
-  /// Create from entity
-  factory TokenModel.fromEntity(TokenEntity entity) {
-    return TokenModel(
-      contractAddress: entity.contractAddress,
-      symbol: entity.symbol,
-      name: entity.name,
-      decimals: entity.decimals,
-      iconUrl: entity.iconUrl,
-      chainType: entity.chainType.name,
-    );
-  }
 }
 
 /// Token balance data model for persistence/caching
 class TokenBalanceModel {
-  final TokenModel token;
-  final String ownerAddress;
-  final String chainIdentifier;
-  final String balanceRaw;
-  final double balanceFormatted;
-  final DateTime fetchedAt;
-  final String? error;
-
   const TokenBalanceModel({
     required this.token,
     required this.ownerAddress,
@@ -170,6 +162,27 @@ class TokenBalanceModel {
       error: json['error'] as String?,
     );
   }
+
+  /// Create from entity
+  factory TokenBalanceModel.fromEntity(TokenBalanceEntity entity) {
+    return TokenBalanceModel(
+      token: TokenModel.fromEntity(entity.token),
+      ownerAddress: entity.ownerAddress,
+      chainIdentifier: entity.chain.identifier,
+      balanceRaw: entity.balanceRaw.toString(),
+      balanceFormatted: entity.balanceFormatted,
+      fetchedAt: entity.fetchedAt,
+      error: entity.error,
+    );
+  }
+
+  final TokenModel token;
+  final String ownerAddress;
+  final String chainIdentifier;
+  final String balanceRaw;
+  final double balanceFormatted;
+  final DateTime fetchedAt;
+  final String? error;
 
   /// Convert to JSON
   Map<String, dynamic> toJson() {
@@ -194,19 +207,6 @@ class TokenBalanceModel {
       balanceFormatted: balanceFormatted,
       fetchedAt: fetchedAt,
       error: error,
-    );
-  }
-
-  /// Create from entity
-  factory TokenBalanceModel.fromEntity(TokenBalanceEntity entity) {
-    return TokenBalanceModel(
-      token: TokenModel.fromEntity(entity.token),
-      ownerAddress: entity.ownerAddress,
-      chainIdentifier: entity.chain.identifier,
-      balanceRaw: entity.balanceRaw.toString(),
-      balanceFormatted: entity.balanceFormatted,
-      fetchedAt: entity.fetchedAt,
-      error: entity.error,
     );
   }
 }

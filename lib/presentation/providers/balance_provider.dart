@@ -243,8 +243,8 @@ final aggregatedBalancesProvider = FutureProvider<AggregatedBalanceEntity?>((ref
       AppLogger.w('Failed to get aggregated balances: ${failure.message}');
       return AggregatedBalanceEntity(
         address: address,
-        nativeBalances: [],
-        tokenBalances: [],
+        nativeBalances: const [],
+        tokenBalances: const [],
         lastUpdated: DateTime.now(),
       );
     },
@@ -258,12 +258,6 @@ final aggregatedBalancesProvider = FutureProvider<AggregatedBalanceEntity?>((ref
 
 /// State for balance management
 class BalanceState {
-  final bool isLoading;
-  final String? error;
-  final NativeBalanceEntity? currentBalance;
-  final List<NativeBalanceEntity> allBalances;
-  final DateTime? lastRefreshed;
-
   const BalanceState({
     this.isLoading = false,
     this.error,
@@ -271,6 +265,12 @@ class BalanceState {
     this.allBalances = const [],
     this.lastRefreshed,
   });
+
+  final bool isLoading;
+  final String? error;
+  final NativeBalanceEntity? currentBalance;
+  final List<NativeBalanceEntity> allBalances;
+  final DateTime? lastRefreshed;
 
   BalanceState copyWith({
     bool? isLoading,

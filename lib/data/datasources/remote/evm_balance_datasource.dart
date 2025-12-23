@@ -6,15 +6,15 @@ import 'package:wallet_integration_practice/core/utils/logger.dart';
 
 /// Token info returned from contract
 class TokenInfo {
-  final String symbol;
-  final String name;
-  final int decimals;
-
   const TokenInfo({
     required this.symbol,
     required this.name,
     required this.decimals,
   });
+
+  final String symbol;
+  final String name;
+  final int decimals;
 }
 
 /// Remote data source for EVM chain balance queries

@@ -7,16 +7,16 @@ import 'package:wallet_integration_practice/presentation/providers/balance_provi
 
 /// A compact balance display widget showing the current chain balance
 class BalanceDisplay extends ConsumerWidget {
-  final bool showRefreshButton;
-  final TextStyle? textStyle;
-  final EdgeInsetsGeometry? padding;
-
   const BalanceDisplay({
     super.key,
     this.showRefreshButton = true,
     this.textStyle,
     this.padding,
   });
+
+  final bool showRefreshButton;
+  final TextStyle? textStyle;
+  final EdgeInsetsGeometry? padding;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -135,13 +135,13 @@ class BalanceDisplay extends ConsumerWidget {
 
 /// Refresh button with stale indicator
 class _RefreshButton extends StatelessWidget {
-  final VoidCallback onPressed;
-  final bool isStale;
-
   const _RefreshButton({
     required this.onPressed,
     required this.isStale,
   });
+
+  final VoidCallback onPressed;
+  final bool isStale;
 
   @override
   Widget build(BuildContext context) {
@@ -183,14 +183,14 @@ class _RefreshButton extends StatelessWidget {
 
 /// A card widget showing native balance for a specific chain
 class ChainBalanceCard extends ConsumerWidget {
-  final ChainInfo chain;
-  final VoidCallback? onTap;
-
   const ChainBalanceCard({
     super.key,
     required this.chain,
     this.onTap,
   });
+
+  final ChainInfo chain;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -383,16 +383,16 @@ class ChainBalanceCard extends ConsumerWidget {
 
 /// A list widget showing balances across multiple chains
 class MultiChainBalanceList extends ConsumerWidget {
-  final List<ChainInfo> chains;
-  final void Function(ChainInfo chain)? onChainTap;
-  final bool showLoading;
-
   const MultiChainBalanceList({
     super.key,
     required this.chains,
     this.onChainTap,
     this.showLoading = true,
   });
+
+  final List<ChainInfo> chains;
+  final void Function(ChainInfo chain)? onChainTap;
+  final bool showLoading;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -414,14 +414,14 @@ class MultiChainBalanceList extends ConsumerWidget {
 
 /// A summary widget showing total balance across all chains
 class TotalBalanceSummary extends ConsumerWidget {
-  final TextStyle? titleStyle;
-  final TextStyle? subtitleStyle;
-
   const TotalBalanceSummary({
     super.key,
     this.titleStyle,
     this.subtitleStyle,
   });
+
+  final TextStyle? titleStyle;
+  final TextStyle? subtitleStyle;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -537,14 +537,14 @@ class TotalBalanceSummary extends ConsumerWidget {
 
 /// Compact inline balance display (for use in list items etc.)
 class InlineBalanceDisplay extends ConsumerWidget {
-  final ChainInfo chain;
-  final TextStyle? style;
-
   const InlineBalanceDisplay({
     super.key,
     required this.chain,
     this.style,
   });
+
+  final ChainInfo chain;
+  final TextStyle? style;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -570,7 +570,7 @@ class InlineBalanceDisplay extends ConsumerWidget {
           ),
         ),
       ),
-      error: (_, __) => Text(
+      error: (_, _) => Text(
         'Error',
         style: style?.copyWith(color: theme.colorScheme.error) ??
             theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.error),

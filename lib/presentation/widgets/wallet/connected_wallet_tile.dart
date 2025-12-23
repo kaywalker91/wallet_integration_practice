@@ -9,15 +9,6 @@ import 'package:wallet_integration_practice/presentation/providers/balance_provi
 ///
 /// Simplified design showing essential information with expandable details.
 class ConnectedWalletTile extends StatefulWidget {
-  final ConnectedWalletEntry entry;
-  final VoidCallback? onMakeActive;
-  final VoidCallback? onDisconnect;
-  final VoidCallback? onRetry;
-  final VoidCallback? onRemove;
-
-  /// Optional balance value for display
-  final double? balance;
-
   const ConnectedWalletTile({
     super.key,
     required this.entry,
@@ -27,6 +18,15 @@ class ConnectedWalletTile extends StatefulWidget {
     this.onRemove,
     this.balance,
   });
+
+  final ConnectedWalletEntry entry;
+  final VoidCallback? onMakeActive;
+  final VoidCallback? onDisconnect;
+  final VoidCallback? onRetry;
+  final VoidCallback? onRemove;
+
+  /// Optional balance value for display
+  final double? balance;
 
   @override
   State<ConnectedWalletTile> createState() => _ConnectedWalletTileState();
@@ -436,17 +436,17 @@ class _ConnectedWalletTileState extends State<ConnectedWalletTile>
 
 /// Compact wallet icon with status indicator and pulse animation
 class _WalletIcon extends StatefulWidget {
-  final WalletType walletType;
-  final bool isActive;
-  final bool hasError;
-  final bool isConnecting;
-
   const _WalletIcon({
     required this.walletType,
     required this.isActive,
     required this.hasError,
     this.isConnecting = false,
   });
+
+  final WalletType walletType;
+  final bool isActive;
+  final bool hasError;
+  final bool isConnecting;
 
   @override
   State<_WalletIcon> createState() => _WalletIconState();
@@ -514,7 +514,7 @@ class _WalletIconState extends State<_WalletIcon>
             height: 40,
             fit: BoxFit.cover,
             errorBuilder: (context, error, stackTrace) {
-              return Container(
+              return ColoredBox(
                 color: theme.colorScheme.primaryContainer,
                 child: Center(
                   child: Text(
@@ -606,9 +606,9 @@ class _WalletIconState extends State<_WalletIcon>
 
 /// Active badge indicator
 class _ActiveBadge extends StatelessWidget {
-  final ThemeData theme;
-
   const _ActiveBadge({required this.theme});
+
+  final ThemeData theme;
 
   @override
   Widget build(BuildContext context) {
@@ -632,17 +632,17 @@ class _ActiveBadge extends StatelessWidget {
 
 /// Detail item widget for expanded view
 class _DetailItem extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String value;
-  final ThemeData theme;
-
   const _DetailItem({
     required this.icon,
     required this.label,
     required this.value,
     required this.theme,
   });
+
+  final IconData icon;
+  final String label;
+  final String value;
+  final ThemeData theme;
 
   @override
   Widget build(BuildContext context) {
@@ -725,12 +725,6 @@ class ActiveWalletBadge extends StatelessWidget {
 /// Use this instead of [ConnectedWalletTile] when you want automatic
 /// balance fetching based on the wallet's chain.
 class ConnectedWalletTileWithBalance extends ConsumerWidget {
-  final ConnectedWalletEntry entry;
-  final VoidCallback? onMakeActive;
-  final VoidCallback? onDisconnect;
-  final VoidCallback? onRetry;
-  final VoidCallback? onRemove;
-
   const ConnectedWalletTileWithBalance({
     super.key,
     required this.entry,
@@ -739,6 +733,12 @@ class ConnectedWalletTileWithBalance extends ConsumerWidget {
     this.onRetry,
     this.onRemove,
   });
+
+  final ConnectedWalletEntry entry;
+  final VoidCallback? onMakeActive;
+  final VoidCallback? onDisconnect;
+  final VoidCallback? onRetry;
+  final VoidCallback? onRemove;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -761,7 +761,7 @@ class ConnectedWalletTileWithBalance extends ConsumerWidget {
       balance = balanceAsync.when(
         data: (b) => b?.balanceFormatted,
         loading: () => null,
-        error: (_, __) => null,
+        error: (_, _) => null,
       );
     }
 

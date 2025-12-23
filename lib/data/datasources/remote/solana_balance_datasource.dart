@@ -6,17 +6,17 @@ import 'package:wallet_integration_practice/core/utils/logger.dart';
 
 /// SPL Token info returned from on-chain data
 class SplTokenInfo {
-  final String mint;
-  final String symbol;
-  final String name;
-  final int decimals;
-
   const SplTokenInfo({
     required this.mint,
     required this.symbol,
     required this.name,
     required this.decimals,
   });
+
+  final String mint;
+  final String symbol;
+  final String name;
+  final int decimals;
 }
 
 /// Remote data source for Solana chain balance queries
@@ -46,30 +46,30 @@ abstract class SolanaBalanceDataSource {
 
 /// SPL Token account with balance
 class SplTokenAccount {
-  final String mint;
-  final String tokenAccount;
-  final BigInt balance;
-  final int decimals;
-
   const SplTokenAccount({
     required this.mint,
     required this.tokenAccount,
     required this.balance,
     required this.decimals,
   });
+
+  final String mint;
+  final String tokenAccount;
+  final BigInt balance;
+  final int decimals;
 }
 
 /// Implementation using Solana JSON-RPC directly via HTTP
 /// This approach avoids package API compatibility issues
 class SolanaBalanceDataSourceImpl implements SolanaBalanceDataSource {
+  SolanaBalanceDataSourceImpl({http.Client? httpClient})
+      : _httpClient = httpClient ?? http.Client();
+
   /// HTTP client for RPC calls
   final http.Client _httpClient;
 
   /// Known token metadata cache
   final Map<String, SplTokenInfo> _tokenMetadataCache = {};
-
-  SolanaBalanceDataSourceImpl({http.Client? httpClient})
-      : _httpClient = httpClient ?? http.Client();
 
   /// Make a JSON-RPC call to Solana
   Future<dynamic> _rpcCall(

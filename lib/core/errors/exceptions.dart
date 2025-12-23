@@ -1,14 +1,14 @@
 /// Base exception class
 abstract class AppException implements Exception {
-  final String message;
-  final String? code;
-  final dynamic originalException;
-
   const AppException({
     required this.message,
     this.code,
     this.originalException,
   });
+
+  final String message;
+  final String? code;
+  final dynamic originalException;
 
   @override
   String toString() => 'AppException: $message (code: $code)';
@@ -25,12 +25,12 @@ class WalletException extends AppException {
 
 /// Exception thrown when wallet app is not installed on device
 class WalletNotInstalledException extends WalletException {
-  final String walletType;
-
   const WalletNotInstalledException({
     required this.walletType,
     required super.message,
   }) : super(code: 'WALLET_NOT_INSTALLED');
+
+  final String walletType;
 
   @override
   String toString() => 'WalletNotInstalledException: $walletType - $message';

@@ -42,24 +42,6 @@ extension WalletEntryStatusX on WalletEntryStatus {
 /// Each entry wraps a [WalletEntity] with additional status tracking
 /// for the multi-wallet UI.
 class ConnectedWalletEntry extends Equatable {
-  /// Unique identifier for this entry (type_address)
-  final String id;
-
-  /// The underlying wallet entity
-  final WalletEntity wallet;
-
-  /// Current connection status
-  final WalletEntryStatus status;
-
-  /// Error message if status is [WalletEntryStatus.error]
-  final String? errorMessage;
-
-  /// Whether this is the currently active wallet for operations
-  final bool isActive;
-
-  /// Timestamp of last activity (connection, selection, etc.)
-  final DateTime lastActivityAt;
-
   const ConnectedWalletEntry({
     required this.id,
     required this.wallet,
@@ -68,12 +50,6 @@ class ConnectedWalletEntry extends Equatable {
     this.isActive = false,
     required this.lastActivityAt,
   });
-
-  /// Generate a unique ID from wallet properties.
-  /// Format: {walletType}_{lowercaseAddress}
-  static String generateId(WalletEntity wallet) {
-    return '${wallet.type.name}_${wallet.address.toLowerCase()}';
-  }
 
   /// Create a new entry from a wallet entity with connecting status
   factory ConnectedWalletEntry.connecting(WalletEntity wallet) {
@@ -111,6 +87,30 @@ class ConnectedWalletEntry extends Equatable {
       errorMessage: errorMessage,
       lastActivityAt: DateTime.now(),
     );
+  }
+
+  /// Unique identifier for this entry (type_address)
+  final String id;
+
+  /// The underlying wallet entity
+  final WalletEntity wallet;
+
+  /// Current connection status
+  final WalletEntryStatus status;
+
+  /// Error message if status is [WalletEntryStatus.error]
+  final String? errorMessage;
+
+  /// Whether this is the currently active wallet for operations
+  final bool isActive;
+
+  /// Timestamp of last activity (connection, selection, etc.)
+  final DateTime lastActivityAt;
+
+  /// Generate a unique ID from wallet properties.
+  /// Format: {walletType}_{lowercaseAddress}
+  static String generateId(WalletEntity wallet) {
+    return '${wallet.type.name}_${wallet.address.toLowerCase()}';
   }
 
   /// Create a copy with updated values

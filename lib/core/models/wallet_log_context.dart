@@ -21,6 +21,48 @@ import 'wallet_log_models.dart';
 /// final updated = context.transitionTo(WalletConnectionStep.wcUriReceived);
 /// ```
 class WalletLogContext {
+  const WalletLogContext({
+    required this.connectionId,
+    required this.walletType,
+    this.chainId,
+    this.cluster,
+    required this.step,
+    this.previousStep,
+    this.lifecycleState,
+    required this.relayState,
+    this.isReconnecting = false,
+    required this.sessionState,
+    this.sessionTopic,
+    this.peerName,
+    this.attempt = 0,
+    this.maxRetries = 3,
+    this.errorCode,
+    this.errorMessage,
+    this.errorClass,
+    required this.startedAt,
+    this.deepLinkInfo,
+    this.deepLinkReturn,
+    this.wcUriInfo,
+  });
+
+  /// Create a new context for starting a connection
+  factory WalletLogContext.start({
+    required WalletType walletType,
+    int? chainId,
+    String? cluster,
+  }) {
+    return WalletLogContext(
+      connectionId: generateConnectionId(walletType),
+      walletType: walletType,
+      chainId: chainId,
+      cluster: cluster,
+      step: WalletConnectionStep.starting,
+      relayState: RelayState.disconnected,
+      sessionState: WcSessionState.none,
+      startedAt: DateTime.now(),
+    );
+  }
+
   // ===== Connection Identity =====
 
   /// Unique ID per connection attempt
@@ -94,12 +136,6 @@ class WalletLogContext {
   /// When this connection attempt started
   final DateTime startedAt;
 
-  /// Duration since start
-  Duration get elapsed => DateTime.now().difference(startedAt);
-
-  /// Elapsed time in milliseconds
-  int get elapsedMs => elapsed.inMilliseconds;
-
   // ===== Deep Link Info =====
 
   /// Last deep link dispatch result
@@ -113,29 +149,11 @@ class WalletLogContext {
   /// WC URI metadata (security-redacted)
   final WcUriInfo? wcUriInfo;
 
-  const WalletLogContext({
-    required this.connectionId,
-    required this.walletType,
-    this.chainId,
-    this.cluster,
-    required this.step,
-    this.previousStep,
-    this.lifecycleState,
-    required this.relayState,
-    this.isReconnecting = false,
-    required this.sessionState,
-    this.sessionTopic,
-    this.peerName,
-    this.attempt = 0,
-    this.maxRetries = 3,
-    this.errorCode,
-    this.errorMessage,
-    this.errorClass,
-    required this.startedAt,
-    this.deepLinkInfo,
-    this.deepLinkReturn,
-    this.wcUriInfo,
-  });
+  /// Duration since start
+  Duration get elapsed => DateTime.now().difference(startedAt);
+
+  /// Elapsed time in milliseconds
+  int get elapsedMs => elapsed.inMilliseconds;
 
   /// Generate a unique connection ID
   ///
@@ -145,24 +163,6 @@ class WalletLogContext {
     final timestamp =
         now.toIso8601String().replaceAll(RegExp(r'[:\-\.]'), '').split('T').join('T').substring(0, 15);
     return '${walletType.name}-$timestamp';
-  }
-
-  /// Create a new context for starting a connection
-  factory WalletLogContext.start({
-    required WalletType walletType,
-    int? chainId,
-    String? cluster,
-  }) {
-    return WalletLogContext(
-      connectionId: generateConnectionId(walletType),
-      walletType: walletType,
-      chainId: chainId,
-      cluster: cluster,
-      step: WalletConnectionStep.starting,
-      relayState: RelayState.disconnected,
-      sessionState: WcSessionState.none,
-      startedAt: DateTime.now(),
-    );
   }
 
   /// Create a copy with updated fields

@@ -5,9 +5,9 @@ import 'package:wallet_integration_practice/domain/repositories/wallet_repositor
 
 /// Use case for sending a transaction
 class SendTransactionUseCase {
-  final TransactionRepository _repository;
-
   SendTransactionUseCase(this._repository);
+
+  final TransactionRepository _repository;
 
   Future<Either<Failure, TransactionResult>> call(
     TransactionRequest request,
@@ -18,9 +18,9 @@ class SendTransactionUseCase {
 
 /// Use case for personal sign
 class PersonalSignUseCase {
-  final TransactionRepository _repository;
-
   PersonalSignUseCase(this._repository);
+
+  final TransactionRepository _repository;
 
   Future<Either<Failure, SignatureResult>> call(
     PersonalSignRequest request,
@@ -31,9 +31,9 @@ class PersonalSignUseCase {
 
 /// Use case for signing typed data (EIP-712)
 class SignTypedDataUseCase {
-  final TransactionRepository _repository;
-
   SignTypedDataUseCase(this._repository);
+
+  final TransactionRepository _repository;
 
   Future<Either<Failure, SignatureResult>> call(
     TypedDataSignRequest request,

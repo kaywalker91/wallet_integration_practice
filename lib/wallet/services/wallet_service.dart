@@ -361,6 +361,109 @@ class WalletService {
     return _activeAdapter?.getConnectionUri();
   }
 
+  /// Get the current session topic for persistence
+  ///
+  /// Returns the session topic from the active WalletConnect-based adapter,
+  /// or null if no session is active or the adapter doesn't support it.
+  Future<String?> getSessionTopic() async {
+    if (_activeAdapter is WalletConnectAdapter) {
+      return (_activeAdapter as WalletConnectAdapter).getSessionTopic();
+    }
+    return null;
+  }
+
+  /// Restore session from persisted session topic
+  ///
+  /// This method is called during app restart to recover a previously
+  /// connected session. It initializes the appropriate adapter and
+  /// attempts to restore the session using the persisted topic.
+  ///
+  /// Returns the restored WalletEntity if successful, null otherwise.
+  Future<WalletEntity?> restoreSession({
+    required String sessionTopic,
+    required WalletType walletType,
+  }) async {
+    AppLogger.wallet('WalletService: Restoring session', data: {
+      'walletType': walletType.name,
+      'sessionTopicPreview': sessionTopic.length > 10
+          ? '${sessionTopic.substring(0, 10)}...'
+          : sessionTopic,
+    });
+
+    try {
+      // Initialize the adapter (this will also setup relay connection)
+      final adapter = await initializeAdapter(walletType);
+
+      // Only WalletConnect-based adapters support session restoration
+      if (adapter is! WalletConnectAdapter) {
+        AppLogger.wallet('Adapter does not support session restoration', data: {
+          'walletType': walletType.name,
+        });
+        return null;
+      }
+
+      // Attempt to restore the session by topic
+      final wallet = await adapter.restoreSessionByTopic(sessionTopic);
+
+      if (wallet != null) {
+        _connectedWallet = wallet;
+        _connectionController.add(WalletConnectionStatus.connected(wallet));
+
+        // Emit initial session accounts if available
+        final accounts = adapter.sessionAccounts;
+        if (accounts.isNotEmpty) {
+          _accountsChangedController.add(accounts);
+        }
+
+        AppLogger.wallet('WalletService: Session restored successfully', data: {
+          'address': wallet.address,
+          'walletType': wallet.type.name,
+          'chainId': wallet.chainId,
+          'sessionAccountCount': accounts.count,
+        });
+      } else {
+        AppLogger.wallet('WalletService: Session restoration failed');
+      }
+
+      return wallet;
+    } catch (e, st) {
+      AppLogger.e('WalletService: Session restoration error', e, st);
+      return null;
+    }
+  }
+
+  /// Set the active adapter and wallet directly.
+  ///
+  /// This is used for Phantom session restoration where the adapter
+  /// handles its own session restoration internally.
+  void setActiveAdapter(BaseWalletAdapter adapter, WalletEntity wallet) {
+    _activeAdapter = adapter;
+    _connectedWallet = wallet;
+
+    // Register adapter in the map for consistency
+    _adapters[wallet.type] = adapter;
+
+    // Cancel existing subscription and set up new one
+    _adapterSubscription?.cancel();
+    _adapterSubscription = adapter.connectionStream.listen((status) {
+      _connectionController.add(status);
+      if (status.isConnected) {
+        _connectedWallet = status.wallet;
+      } else if (status.isDisconnected) {
+        _connectedWallet = null;
+      }
+    });
+
+    // Emit connected status
+    _connectionController.add(WalletConnectionStatus.connected(wallet));
+
+    AppLogger.wallet('WalletService: Active adapter set directly', data: {
+      'walletType': wallet.type.name,
+      'address': wallet.address,
+      'cluster': wallet.cluster,
+    });
+  }
+
   /// Set the active account for transactions.
   ///
   /// The address must be one of the accounts approved in the session.

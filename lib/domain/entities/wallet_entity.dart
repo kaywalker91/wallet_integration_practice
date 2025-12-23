@@ -3,14 +3,6 @@ import 'package:wallet_integration_practice/core/constants/wallet_constants.dart
 
 /// Connected wallet entity
 class WalletEntity extends Equatable {
-  final String address;
-  final WalletType type;
-  final int? chainId;
-  final String? cluster; // For Solana
-  final String? sessionTopic;
-  final DateTime connectedAt;
-  final Map<String, dynamic>? metadata;
-
   const WalletEntity({
     required this.address,
     required this.type,
@@ -20,6 +12,14 @@ class WalletEntity extends Equatable {
     required this.connectedAt,
     this.metadata,
   });
+
+  final String address;
+  final WalletType type;
+  final int? chainId;
+  final String? cluster; // For Solana
+  final String? sessionTopic;
+  final DateTime connectedAt;
+  final Map<String, dynamic>? metadata;
 
   /// Check if connected to EVM chain
   bool get isEvmChain => chainId != null;
@@ -72,13 +72,6 @@ enum WalletConnectionState {
 
 /// Wallet connection status
 class WalletConnectionStatus extends Equatable {
-  final WalletConnectionState state;
-  final WalletEntity? wallet;
-  final String? errorMessage;
-  final String? progressMessage;
-  final int? retryCount;
-  final int? maxRetries;
-
   const WalletConnectionStatus({
     required this.state,
     this.wallet,
@@ -120,6 +113,13 @@ class WalletConnectionStatus extends Equatable {
       errorMessage: message,
     );
   }
+
+  final WalletConnectionState state;
+  final WalletEntity? wallet;
+  final String? errorMessage;
+  final String? progressMessage;
+  final int? retryCount;
+  final int? maxRetries;
 
   bool get isConnected => state == WalletConnectionState.connected;
   bool get isConnecting => state == WalletConnectionState.connecting;

@@ -109,13 +109,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   Future<void> _connectWallet(WalletInfo wallet) async {
     if (wallet.type == WalletType.walletConnect) {
-      Navigator.of(context).push(
+      await Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (_) => const WalletConnectModal(), 
+          builder: (_) => const WalletConnectModal(),
         ),
       );
     } else {
-      Navigator.of(context).push(
+      await Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => OnboardingLoadingPage(
             walletType: wallet.type,
@@ -153,24 +153,22 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ),
         );
 
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                'Signed! Signature: ${AddressUtils.truncate(result.signature, start: 10, end: 10)}',
-              ),
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Signed! Signature: ${AddressUtils.truncate(result.signature, start: 10, end: 10)}',
             ),
-          );
-        }
+          ),
+        );
       } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Signing failed: ${e.toString()}'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Signing failed: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
     }
   }

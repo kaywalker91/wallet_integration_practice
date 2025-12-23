@@ -4,11 +4,10 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:wallet_integration_practice/core/core.dart';
 import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
 import 'package:wallet_integration_practice/wallet/adapters/walletconnect_adapter.dart';
-import 'package:wallet_integration_practice/wallet/models/wallet_adapter_config.dart';
 
 /// MetaMask wallet adapter (extends WalletConnect with deep linking)
 class MetaMaskAdapter extends WalletConnectAdapter {
-  MetaMaskAdapter({WalletAdapterConfig? config}) : super(config: config);
+  MetaMaskAdapter({super.config});
 
   @override
   WalletType get walletType => WalletType.metamask;
@@ -82,7 +81,7 @@ class MetaMaskAdapter extends WalletConnectAdapter {
 
   @override
   bool isSessionValid(SessionData session) {
-    final name = session.peer?.metadata.name.toLowerCase() ?? '';
+    final name = session.peer.metadata.name.toLowerCase();
     final isValid = name.contains('metamask');
     if (!isValid) {
       AppLogger.d('MetaMaskAdapter ignored session for: $name');

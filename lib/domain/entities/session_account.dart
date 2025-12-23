@@ -5,21 +5,6 @@ import 'package:equatable/equatable.dart';
 /// Follows CAIP-10 format: namespace:chainId:address
 /// Example: "eip155:1:0xab16a96d359ec26a11e2c2b3d8f8b8942d5bfcdb"
 class SessionAccount extends Equatable {
-  /// Full CAIP-10 account identifier
-  final String caip10Id;
-
-  /// Namespace (e.g., "eip155" for EVM, "solana" for Solana)
-  final String namespace;
-
-  /// Chain ID as string (e.g., "1" for Ethereum mainnet, "137" for Polygon)
-  final String chainId;
-
-  /// Wallet address
-  final String address;
-
-  /// Optional display name for the account
-  final String? displayName;
-
   const SessionAccount({
     required this.caip10Id,
     required this.namespace,
@@ -64,6 +49,21 @@ class SessionAccount extends Equatable {
       displayName: displayName,
     );
   }
+
+  /// Full CAIP-10 account identifier
+  final String caip10Id;
+
+  /// Namespace (e.g., "eip155" for EVM, "solana" for Solana)
+  final String namespace;
+
+  /// Chain ID as string (e.g., "1" for Ethereum mainnet, "137" for Polygon)
+  final String chainId;
+
+  /// Wallet address
+  final String address;
+
+  /// Optional display name for the account
+  final String? displayName;
 
   /// Check if this is an EVM account
   bool get isEvm => namespace == 'eip155';
@@ -112,12 +112,6 @@ class SessionAccount extends Equatable {
 /// Manages multiple accounts from a single WalletConnect session,
 /// allowing the user to select which account to use for transactions.
 class SessionAccounts extends Equatable {
-  /// All accounts approved in the session
-  final List<SessionAccount> accounts;
-
-  /// Currently active account address for transactions
-  final String? activeAddress;
-
   const SessionAccounts({
     required this.accounts,
     this.activeAddress,
@@ -147,6 +141,12 @@ class SessionAccounts extends Equatable {
       activeAddress: accounts.first.address,
     );
   }
+
+  /// All accounts approved in the session
+  final List<SessionAccount> accounts;
+
+  /// Currently active account address for transactions
+  final String? activeAddress;
 
   /// Get the currently active account
   SessionAccount? get activeAccount {

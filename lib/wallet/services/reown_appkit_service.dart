@@ -20,10 +20,6 @@ enum AppKitConnectionState {
 
 /// AppKit connection status with wallet info
 class AppKitConnectionStatus {
-  final AppKitConnectionState state;
-  final WalletEntity? wallet;
-  final String? errorMessage;
-
   const AppKitConnectionStatus._({
     required this.state,
     this.wallet,
@@ -47,6 +43,10 @@ class AppKitConnectionStatus {
         state: AppKitConnectionState.error,
         errorMessage: message,
       );
+
+  final AppKitConnectionState state;
+  final WalletEntity? wallet;
+  final String? errorMessage;
 
   bool get isConnected => state == AppKitConnectionState.connected;
   bool get isConnecting => state == AppKitConnectionState.connecting;
@@ -100,7 +100,7 @@ class ReownAppKitService {
     }
 
     try {
-      final pairingMetadata = PairingMetadata(
+      const pairingMetadata = PairingMetadata(
         name: AppConstants.appName,
         description: AppConstants.appDescription,
         url: AppConstants.appUrl,
@@ -116,7 +116,6 @@ class ReownAppKitService {
         projectId: AppConstants.walletConnectProjectId,
         metadata: pairingMetadata,
         featuresConfig: FeaturesConfig(
-          email: false,
           socials: [],
           showMainWallets: true,
         ),
@@ -131,7 +130,7 @@ class ReownAppKitService {
         },
         // Supported networks - uses default eip155 chains
         optionalNamespaces: {
-          'eip155': RequiredNamespace(
+          'eip155': const RequiredNamespace(
             chains: [
               'eip155:1',    // Ethereum
               'eip155:137',  // Polygon
@@ -197,7 +196,7 @@ class ReownAppKitService {
     // Listen to modal state changes
     _appKitModal!.onModalConnect.subscribe((event) {
       AppLogger.wallet('AppKit onModalConnect', data: {
-        'session': event?.session?.topic,
+        'session': event.session.topic,
       });
       _handleConnectionChange();
     });
@@ -208,15 +207,15 @@ class ReownAppKitService {
     });
 
     _appKitModal!.onModalError.subscribe((event) {
-      AppLogger.e('AppKit onModalError', event?.message);
+      AppLogger.e('AppKit onModalError', event.message);
       _connectionController.add(
-        AppKitConnectionStatus.error(event?.message ?? 'Unknown error'),
+        AppKitConnectionStatus.error(event.message),
       );
     });
 
     _appKitModal!.onModalNetworkChange.subscribe((event) {
       AppLogger.wallet('AppKit network changed', data: {
-        'chainId': event?.chainId,
+        'chainId': event.chainId,
       });
       _handleConnectionChange();
     });
@@ -224,8 +223,8 @@ class ReownAppKitService {
     // Session events
     _appKitModal!.onSessionEventEvent.subscribe((event) {
       AppLogger.wallet('AppKit session event', data: {
-        'name': event?.name,
-        'data': event?.data?.toString(),
+        'name': event.name,
+        'data': event.data?.toString(),
       });
     });
 
@@ -284,6 +283,7 @@ class ReownAppKitService {
 
     if (peerName.contains('coinbase')) return WalletType.coinbase;
     if (peerName.contains('metamask')) return WalletType.metamask;
+    if (peerName.contains('okx') || peerName.contains('okex')) return WalletType.okxWallet;
     if (peerName.contains('trust')) return WalletType.trustWallet;
     if (peerName.contains('phantom')) return WalletType.phantom;
     if (peerName.contains('rabby')) return WalletType.rabby;

@@ -2,9 +2,13 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
 import 'package:wallet_integration_practice/core/core.dart';
+import 'package:wallet_integration_practice/data/datasources/local/wallet_local_datasource.dart';
+import 'package:wallet_integration_practice/data/datasources/local/multi_session_datasource.dart';
+import 'package:wallet_integration_practice/data/models/persisted_session_model.dart';
 import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
 import 'package:wallet_integration_practice/domain/entities/connected_wallet_entry.dart';
 import 'package:wallet_integration_practice/domain/entities/multi_wallet_state.dart';
+import 'package:wallet_integration_practice/domain/entities/multi_session_state.dart';
 import 'package:wallet_integration_practice/domain/entities/session_account.dart';
 import 'package:wallet_integration_practice/wallet/wallet.dart';
 import 'package:wallet_integration_practice/presentation/providers/balance_provider.dart';
@@ -30,6 +34,20 @@ final deepLinkStreamProvider = StreamProvider<Uri>((ref) {
 final pendingConnectionServiceProvider = Provider<PendingConnectionService>((ref) {
   final prefs = ref.watch(sharedPreferencesProvider);
   return PendingConnectionService(prefs);
+});
+
+/// Provider for WalletLocalDataSource
+///
+/// 세션 지속성을 위한 로컬 데이터 소스 (레거시, 단일 세션)
+final walletLocalDataSourceProvider = Provider<WalletLocalDataSource>((ref) {
+  return WalletLocalDataSourceImpl();
+});
+
+/// Provider for MultiSessionDataSource
+///
+/// 다중 지갑 세션 지속성을 위한 데이터 소스
+final multiSessionDataSourceProvider = Provider<MultiSessionDataSource>((ref) {
+  return MultiSessionDataSourceImpl();
 });
 
 /// Provider for WalletService
@@ -89,17 +107,17 @@ final walletRetryStatusProvider = Provider<WalletRetryStatus>((ref) {
 
 /// Retry status model for UI
 class WalletRetryStatus {
-  final bool isRetrying;
-  final int currentAttempt;
-  final int maxAttempts;
-  final String? message;
-
   const WalletRetryStatus({
     this.isRetrying = false,
     this.currentAttempt = 0,
     this.maxAttempts = 0,
     this.message,
   });
+
+  final bool isRetrying;
+  final int currentAttempt;
+  final int maxAttempts;
+  final String? message;
 
   String get displayMessage {
     if (isRetrying) {
@@ -111,6 +129,13 @@ class WalletRetryStatus {
 
 /// Recovery options state for connection timeout/failure
 class ConnectionRecoveryState {
+  const ConnectionRecoveryState({
+    this.showRecoveryOptions = false,
+    this.connectionUri,
+    this.walletType,
+    this.shownAt,
+  });
+
   /// Whether to show recovery options UI
   final bool showRecoveryOptions;
 
@@ -122,13 +147,6 @@ class ConnectionRecoveryState {
 
   /// Time when recovery options were shown
   final DateTime? shownAt;
-
-  const ConnectionRecoveryState({
-    this.showRecoveryOptions = false,
-    this.connectionUri,
-    this.walletType,
-    this.shownAt,
-  });
 
   ConnectionRecoveryState copyWith({
     bool? showRecoveryOptions,
@@ -151,13 +169,19 @@ class ConnectionRecoveryState {
 /// Notifier for wallet operations (Riverpod 3.0 - extends Notifier)
 class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
   WalletService get _walletService => ref.read(walletServiceProvider);
+  WalletLocalDataSource get _localDataSource => ref.read(walletLocalDataSourceProvider);
+  MultiSessionDataSource get _multiSessionDataSource => ref.read(multiSessionDataSourceProvider);
   StreamSubscription<Uri>? _deepLinkSubscription;
 
-  /// Timer for approval timeout (shows recovery options after 15 seconds)
+  /// Timer for approval timeout (shows recovery options after delay)
   Timer? _approvalTimeoutTimer;
 
   /// Duration before showing recovery options
-  static const _approvalTimeoutDuration = Duration(seconds: 15);
+  /// Extended to 45s to accommodate:
+  /// - User review time in wallet app
+  /// - Android background network restrictions
+  /// - Relay reconnection attempts
+  static const _approvalTimeoutDuration = Duration(seconds: 45);
 
   @override
   AsyncValue<WalletEntity?> build() {
@@ -202,17 +226,336 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
     _approvalTimeoutTimer = null;
   }
 
+  // ============================================================================
+  // Session Persistence Methods
+  // ============================================================================
+
+  /// Save session for persistence after successful connection
+  Future<void> _saveSessionForPersistence(WalletEntity wallet) async {
+    try {
+      // Generate wallet ID
+      final walletId = WalletIdGenerator.generate(wallet.type.name, wallet.address);
+
+      // For WalletConnect-based wallets
+      if (_isWalletConnectBased(wallet.type)) {
+        // Get session topic from WalletService
+        final sessionTopic = await _walletService.getSessionTopic();
+        if (sessionTopic == null) {
+          AppLogger.wallet('No session topic available, skipping persistence', data: {
+            'walletType': wallet.type.name,
+          });
+          return;
+        }
+
+        final now = DateTime.now();
+        final session = PersistedSessionModel(
+          walletType: wallet.type.name,
+          sessionTopic: sessionTopic,
+          address: wallet.address,
+          chainId: wallet.chainId,
+          cluster: wallet.cluster,
+          createdAt: now,
+          lastUsedAt: now,
+          expiresAt: now.add(const Duration(days: 7)), // 7-day expiration
+        );
+
+        // Save to multi-session storage
+        await _multiSessionDataSource.saveWalletConnectSession(
+          walletId: walletId,
+          session: session,
+        );
+
+        // Set as active wallet
+        await _multiSessionDataSource.setActiveWalletId(walletId);
+
+        AppLogger.wallet('Session persisted to multi-session storage', data: {
+          'walletId': walletId,
+          'walletType': wallet.type.name,
+          'address': wallet.address,
+        });
+      } else if (wallet.type == WalletType.phantom) {
+        // Phantom session is saved by the adapter, we just need to add to multi-session
+        final phantomSession = await _localDataSource.getPhantomSession();
+        if (phantomSession != null) {
+          await _multiSessionDataSource.savePhantomSession(
+            walletId: walletId,
+            session: phantomSession,
+          );
+          await _multiSessionDataSource.setActiveWalletId(walletId);
+
+          AppLogger.wallet('Phantom session persisted to multi-session storage', data: {
+            'walletId': walletId,
+            'address': wallet.address,
+          });
+        }
+      }
+    } catch (e, st) {
+      // Non-critical operation, log but don't throw
+      AppLogger.e('Failed to persist session', e, st);
+    }
+  }
+
+  /// Check if wallet type uses WalletConnect protocol
+  bool _isWalletConnectBased(WalletType type) {
+    return type == WalletType.walletConnect ||
+        type == WalletType.metamask ||
+        type == WalletType.trustWallet ||
+        type == WalletType.okxWallet ||
+        type == WalletType.coinbase ||
+        type == WalletType.rabby;
+  }
+
   Future<void> _init() async {
+    AppLogger.wallet('WalletNotifier._init() called - starting wallet initialization');
+
     // Initialize wallet service (also registers deep link handlers)
     await _walletService.initialize();
+
+    // Migrate legacy single-session data to multi-session format
+    await _migrateAndRestoreAllSessions();
+
+    // Check if WalletService already has a connected wallet
+    // (e.g., from AppKit's internal session restoration)
     if (_walletService.connectedWallet != null) {
       state = AsyncValue.data(_walletService.connectedWallet);
+      // Update persistence with current session (using multi-session storage)
+      await _saveSessionForPersistence(_walletService.connectedWallet!);
+    } else {
+      // If no wallet connected after initial restoration attempt,
+      // schedule a delayed retry for cases where network is slow to connect
+      _scheduleDelayedRestoration();
     }
 
     // Subscribe to deep link stream for logging
     _deepLinkSubscription = DeepLinkService.instance.deepLinkStream.listen((uri) {
       AppLogger.d('WalletNotifier received deep link: $uri');
     });
+  }
+
+  /// Schedule a delayed restoration attempt
+  /// This helps when initial restoration fails due to slow network/relay connection
+  void _scheduleDelayedRestoration() {
+    Future.delayed(const Duration(seconds: 3), () async {
+      // Skip if already connected
+      if (_walletService.connectedWallet != null) return;
+      if (state.value != null) return;
+
+      AppLogger.wallet('Attempting delayed session restoration...');
+
+      try {
+        final sessionState = await _multiSessionDataSource.getAllSessions();
+        if (sessionState.isEmpty) return;
+
+        // Try to restore active wallet session
+        if (sessionState.activeWalletId != null) {
+          final entry = sessionState.getSession(sessionState.activeWalletId!);
+          if (entry != null) {
+            // Pass the model directly (not entity) as _restoreSessionEntry expects model
+            final wallet = await _restoreSessionEntry(entry);
+            if (wallet != null) {
+              state = AsyncValue.data(wallet);
+              ref.read(multiWalletNotifierProvider.notifier).registerWallet(wallet);
+              AppLogger.wallet('Delayed session restoration succeeded', data: {
+                'address': wallet.address,
+              });
+            }
+          }
+        }
+      } catch (e, st) {
+        AppLogger.e('Delayed session restoration failed', e, st);
+      }
+    });
+  }
+
+  /// Migrate legacy sessions and restore all persisted sessions
+  Future<void> _migrateAndRestoreAllSessions() async {
+    try {
+      // 1. Migrate legacy single-session data to multi-session format
+      final migrated = await _multiSessionDataSource.migrateLegacySessions();
+      if (migrated) {
+        AppLogger.wallet('Legacy sessions migrated to multi-session storage');
+      }
+
+      // 2. Remove any expired sessions
+      final expiredCount = await _multiSessionDataSource.removeExpiredSessions();
+      if (expiredCount > 0) {
+        AppLogger.wallet('Removed expired sessions', data: {'count': expiredCount});
+      }
+
+      // 3. Get all valid sessions
+      final sessionState = await _multiSessionDataSource.getAllSessions();
+      if (sessionState.isEmpty) {
+        AppLogger.wallet('No persisted sessions found');
+        return;
+      }
+
+      AppLogger.wallet('Restoring multi-wallet sessions', data: {
+        'sessionCount': sessionState.count,
+        'activeWalletId': sessionState.activeWalletId,
+      });
+
+      // 4. Restore each session
+      WalletEntity? activeWallet;
+      for (final entry in sessionState.sessionList) {
+        final wallet = await _restoreSessionEntry(entry);
+        if (wallet != null) {
+          // Register with MultiWalletNotifier
+          ref.read(multiWalletNotifierProvider.notifier).registerWallet(wallet);
+
+          // Track the active wallet
+          if (entry.walletId == sessionState.activeWalletId) {
+            activeWallet = wallet;
+          }
+        }
+      }
+
+      // 5. Set the active wallet state
+      if (activeWallet != null) {
+        state = AsyncValue.data(activeWallet);
+        AppLogger.wallet('Active wallet restored', data: {
+          'address': activeWallet.address,
+          'type': activeWallet.type.name,
+        });
+      }
+    } catch (e, st) {
+      AppLogger.e('Failed to restore multi-wallet sessions', e, st);
+    }
+  }
+
+  /// Restore a single session entry
+  Future<WalletEntity?> _restoreSessionEntry(
+    dynamic entry, // MultiSessionEntryModel
+  ) async {
+    try {
+      // Check session type and restore accordingly
+      if (entry.sessionType == SessionType.walletConnect) {
+        return await _restoreWalletConnectSession(entry);
+      } else if (entry.sessionType == SessionType.phantom) {
+        return await _restorePhantomSessionEntry(entry);
+      }
+      return null;
+    } catch (e, st) {
+      AppLogger.e('Failed to restore session entry: ${entry.walletId}', e, st);
+      // Remove failed session
+      await _multiSessionDataSource.removeSession(entry.walletId);
+      return null;
+    }
+  }
+
+  /// Restore a WalletConnect-based session from entry
+  /// Includes retry logic with relay connection waiting
+  Future<WalletEntity?> _restoreWalletConnectSession(dynamic entry) async {
+    final wcSession = entry.walletConnectSession;
+    if (wcSession == null) return null;
+
+    final persistedSession = wcSession.toEntity();
+    if (persistedSession.isExpired) {
+      AppLogger.wallet('WalletConnect session expired', data: {
+        'walletId': entry.walletId,
+      });
+      return null;
+    }
+
+    final walletType = WalletType.values.firstWhere(
+      (t) => t.name == persistedSession.walletType,
+      orElse: () => WalletType.walletConnect,
+    );
+
+    AppLogger.wallet('Attempting WalletConnect session restoration', data: {
+      'walletType': persistedSession.walletType,
+      'address': persistedSession.address,
+    });
+
+    // Attempt restoration with retries
+    // Relay connection might not be ready immediately after cold start
+    const maxRetries = 3;
+    const retryDelays = [
+      Duration(milliseconds: 500),
+      Duration(seconds: 1),
+      Duration(seconds: 2),
+    ];
+
+    for (var attempt = 0; attempt < maxRetries; attempt++) {
+      // Attempt restoration via WalletService
+      final wallet = await _walletService.restoreSession(
+        sessionTopic: persistedSession.sessionTopic,
+        walletType: walletType,
+      );
+
+      if (wallet != null) {
+        // Update last used timestamp
+        await _multiSessionDataSource.updateSessionLastUsed(entry.walletId);
+        AppLogger.wallet('WalletConnect session restored', data: {
+          'address': wallet.address,
+          'attempt': attempt + 1,
+        });
+        return wallet;
+      }
+
+      // If not last attempt, wait before retry
+      if (attempt < maxRetries - 1) {
+        AppLogger.wallet('Session restoration attempt failed, retrying...', data: {
+          'attempt': attempt + 1,
+          'maxRetries': maxRetries,
+          'nextDelay': retryDelays[attempt].inMilliseconds,
+        });
+        await Future.delayed(retryDelays[attempt]);
+      }
+    }
+
+    AppLogger.wallet('WalletConnect session restoration failed after retries', data: {
+      'walletType': persistedSession.walletType,
+      'address': persistedSession.address,
+      'attempts': maxRetries,
+    });
+
+    return null;
+  }
+
+  /// Restore a Phantom session from entry
+  Future<WalletEntity?> _restorePhantomSessionEntry(dynamic entry) async {
+    final phantomSession = entry.phantomSession;
+    if (phantomSession == null) return null;
+
+    final session = phantomSession.toEntity();
+    if (session.isExpired) {
+      AppLogger.wallet('Phantom session expired', data: {
+        'walletId': entry.walletId,
+      });
+      return null;
+    }
+
+    AppLogger.wallet('Attempting Phantom session restoration', data: {
+      'address': session.connectedAddress,
+      'cluster': session.cluster,
+    });
+
+    // Initialize PhantomAdapter with localDataSource
+    final adapter = await _walletService.initializeAdapter(WalletType.phantom);
+    if (adapter is PhantomAdapter) {
+      adapter.setLocalDataSource(_localDataSource);
+
+      // Save phantom session to legacy storage for adapter restoration
+      await _localDataSource.savePhantomSession(phantomSession);
+
+      // Attempt to restore the session
+      final wallet = await adapter.restoreSession();
+
+      if (wallet != null) {
+        // Set the adapter as active
+        _walletService.setActiveAdapter(adapter, wallet);
+
+        // Update last used timestamp
+        await _multiSessionDataSource.updateSessionLastUsed(entry.walletId);
+
+        AppLogger.wallet('Phantom session restored', data: {
+          'address': wallet.address,
+        });
+        return wallet;
+      }
+    }
+
+    return null;
   }
 
   /// Connect to a wallet
@@ -340,6 +683,9 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
       // [WalletLogService] End connection successfully
       WalletLogService.instance.endConnection(success: true);
 
+      // Save session for persistence (non-blocking)
+      unawaited(_saveSessionForPersistence(wallet));
+
       state = AsyncValue.data(wallet);
     } catch (e, st) {
       // [Sentry] Track connection failure
@@ -374,6 +720,23 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
 
     try {
       await _walletService.disconnect();
+
+      // Clear persisted session from multi-session storage
+      if (currentWallet != null) {
+        final walletId = WalletIdGenerator.generate(
+          currentWallet.type.name,
+          currentWallet.address,
+        );
+        unawaited(_multiSessionDataSource.removeSession(walletId).catchError((e) {
+          AppLogger.e('Failed to remove session from multi-session storage', e);
+        }));
+      }
+
+      // Clear legacy persisted session (non-blocking, best-effort)
+      unawaited(_localDataSource.clearPersistedSession().catchError((e) {
+        AppLogger.e('Failed to clear persisted session', e);
+      }));
+
       state = const AsyncValue.data(null);
     } catch (e, st) {
       // [Sentry] Capture disconnect error
@@ -382,6 +745,17 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
         stackTrace: st,
         tags: {'error_type': 'wallet_disconnect'},
       );
+
+      // Still try to clear persisted sessions even on error
+      if (currentWallet != null) {
+        final walletId = WalletIdGenerator.generate(
+          currentWallet.type.name,
+          currentWallet.address,
+        );
+        unawaited(_multiSessionDataSource.removeSession(walletId).catchError((_) {}));
+      }
+      unawaited(_localDataSource.clearPersistedSession().catchError((_) {}));
+
       state = AsyncValue.error(e, st);
     }
   }
@@ -439,9 +813,9 @@ final walletNotifierProvider =
   WalletNotifier.new,
 );
 
-/// Provider for supported wallets (deep link only - QR removed)
-/// Supported: MetaMask, Trust Wallet, Phantom, Rabby
-/// Removed: WalletConnect (QR only), Coinbase (no deep link), Rainbow (no deep link)
+/// Provider for supported wallets
+/// Deep link: MetaMask, OKX Wallet, Trust Wallet, Phantom, Rabby
+/// Other flows: Coinbase Wallet (SDK), WalletConnect (QR)
 final supportedWalletsProvider = Provider<List<WalletInfo>>((ref) {
   return [
     WalletInfo(
@@ -457,6 +831,14 @@ final supportedWalletsProvider = Provider<List<WalletInfo>>((ref) {
       name: 'Coinbase Wallet',
       description: 'Mobile & Chrome extension wallet',
       iconUrl: WalletType.coinbase.iconAsset,
+      supportsEvm: true,
+      supportsSolana: true,
+    ),
+    WalletInfo(
+      type: WalletType.okxWallet,
+      name: 'OKX Wallet',
+      description: 'Multi-chain wallet by OKX',
+      iconUrl: WalletType.okxWallet.iconAsset,
       supportsEvm: true,
       supportsSolana: true,
     ),
@@ -497,13 +879,6 @@ final supportedWalletsProvider = Provider<List<WalletInfo>>((ref) {
 
 /// Wallet info model for display
 class WalletInfo {
-  final WalletType type;
-  final String name;
-  final String description;
-  final String iconUrl;
-  final bool supportsEvm;
-  final bool supportsSolana;
-
   const WalletInfo({
     required this.type,
     required this.name,
@@ -512,6 +887,13 @@ class WalletInfo {
     required this.supportsEvm,
     required this.supportsSolana,
   });
+
+  final WalletType type;
+  final String name;
+  final String description;
+  final String iconUrl;
+  final bool supportsEvm;
+  final bool supportsSolana;
 }
 
 // ============================================================================
@@ -521,9 +903,16 @@ class WalletInfo {
 /// Notifier for managing multiple wallet connections (Riverpod 3.0)
 class MultiWalletNotifier extends Notifier<MultiWalletState> {
   WalletService get _walletService => ref.read(walletServiceProvider);
+  WalletLocalDataSource get _localDataSource => ref.read(walletLocalDataSourceProvider);
+  MultiSessionDataSource get _multiSessionDataSource => ref.read(multiSessionDataSourceProvider);
 
   @override
   MultiWalletState build() {
+    // CRITICAL: Trigger WalletNotifier initialization to restore sessions on cold start
+    // Without this, walletNotifierProvider is never read and _init() is never called
+    // This fixes the issue where MetaMask connection is lost after app kill/restart
+    ref.read(walletNotifierProvider);
+
     return const MultiWalletState();
   }
 
@@ -589,22 +978,24 @@ class MultiWalletNotifier extends Notifier<MultiWalletState> {
 
     try {
       // Start connection - don't await, stream is source of truth
-      _walletService.connect(
-        walletType: walletType,
-        chainId: chainId,
-        cluster: cluster,
-      ).then((_) {
-        // Success handled by stream
-      }).catchError((e, st) {
-        AppLogger.wallet('Connect threw (stream is source of truth)', data: {
-          'error': e.toString(),
-        });
-        // Forward error to completer if not already completed
-        // This fixes the race condition where exception propagates before stream emits error
-        if (!completer.isCompleted) {
-          completer.completeError(e, st);
-        }
-      });
+      unawaited(_walletService
+          .connect(
+            walletType: walletType,
+            chainId: chainId,
+            cluster: cluster,
+          )
+          .then((_) {
+            // Success handled by stream
+          }).catchError((e, st) {
+            AppLogger.wallet('Connect threw (stream is source of truth)', data: {
+              'error': e.toString(),
+            });
+            // Forward error to completer if not already completed
+            // This fixes the race condition where exception propagates before stream emits error
+            if (!completer.isCompleted) {
+              completer.completeError(e, st);
+            }
+          }));
 
       // Wait for result
       final wallet = await completer.future;
@@ -650,6 +1041,9 @@ class MultiWalletNotifier extends Notifier<MultiWalletState> {
       // [WalletLogService] End connection successfully (MultiWallet)
       WalletLogService.instance.endConnection(success: true);
 
+      // Save session to multi-session storage (non-blocking)
+      unawaited(_saveWalletSession(wallet));
+
       AppLogger.wallet('Multi-wallet: Added wallet', data: {
         'id': realId,
         'type': wallet.type.name,
@@ -659,26 +1053,27 @@ class MultiWalletNotifier extends Notifier<MultiWalletState> {
     } catch (e, st) {
       // Check if this is an expected failure (user behavior, not a bug)
       // Expected failures: TIMEOUT, USER_REJECTED, USER_CANCELLED, CANCELLED
-      final isExpectedFailure = e is WalletException &&
-          WalletConstants.expectedFailureCodes.contains(e.code);
+      final walletException = e is WalletException ? e : null;
+      final isExpectedFailure = walletException != null &&
+          WalletConstants.expectedFailureCodes.contains(walletException.code);
 
       if (isExpectedFailure) {
         // Expected failures - log locally but don't send to Sentry as error
         // These are normal user behaviors (didn't approve in time, rejected, etc.)
         AppLogger.wallet('Expected connection failure', data: {
           'walletType': walletType.name,
-          'errorCode': (e as WalletException).code,
-          'message': e.message,
+          'errorCode': walletException.code,
+          'message': walletException.message,
         });
 
         // Track as breadcrumb only (not as error event)
         // This provides context for debugging without cluttering error reports
         _sentry.addBreadcrumb(
-          message: 'Wallet connection expected failure: ${(e as WalletException).code}',
+          message: 'Wallet connection expected failure: ${walletException.code}',
           category: 'wallet.connection',
           data: {
             'wallet_type': walletType.name,
-            'error_code': e.code,
+            'error_code': walletException.code,
             'chain_id': chainId,
           },
           level: SentryLevel.info,
@@ -768,6 +1163,15 @@ class MultiWalletNotifier extends Notifier<MultiWalletState> {
         await _walletService.disconnect();
       }
 
+      // Remove from multi-session storage
+      final sessionWalletId = WalletIdGenerator.generate(
+        entry.wallet.type.name,
+        entry.wallet.address,
+      );
+      unawaited(_multiSessionDataSource.removeSession(sessionWalletId).catchError((e) {
+        AppLogger.e('Failed to remove session from multi-session storage', e);
+      }));
+
       // Remove from list
       state = state.removeWallet(walletId);
 
@@ -776,7 +1180,12 @@ class MultiWalletNotifier extends Notifier<MultiWalletState> {
         'remainingWallets': state.totalCount,
       });
     } catch (e) {
-      // Still remove on error
+      // Still remove on error - also remove from multi-session storage
+      final sessionWalletId = WalletIdGenerator.generate(
+        entry.wallet.type.name,
+        entry.wallet.address,
+      );
+      unawaited(_multiSessionDataSource.removeSession(sessionWalletId).catchError((_) {}));
       state = state.removeWallet(walletId);
       AppLogger.e('Multi-wallet: Error during disconnect', e);
     }
@@ -824,8 +1233,80 @@ class MultiWalletNotifier extends Notifier<MultiWalletState> {
   }
 
   /// Clear all wallets
-  void clearAll() {
+  Future<void> clearAll() async {
+    // Clear multi-session storage
+    unawaited(_multiSessionDataSource.clearAllSessions().catchError((e) {
+      AppLogger.e('Failed to clear all sessions from storage', e);
+    }));
     state = const MultiWalletState();
+  }
+
+  /// Save wallet session to multi-session storage
+  Future<void> _saveWalletSession(WalletEntity wallet) async {
+    try {
+      final walletId = WalletIdGenerator.generate(wallet.type.name, wallet.address);
+
+      // Check if this is a WalletConnect-based wallet
+      if (_isWalletConnectBased(wallet.type)) {
+        // Get session topic from WalletService
+        final sessionTopic = await _walletService.getSessionTopic();
+        if (sessionTopic == null) {
+          AppLogger.wallet('No session topic available for MultiWallet persistence', data: {
+            'walletType': wallet.type.name,
+          });
+          return;
+        }
+
+        final now = DateTime.now();
+        final session = PersistedSessionModel(
+          walletType: wallet.type.name,
+          sessionTopic: sessionTopic,
+          address: wallet.address,
+          chainId: wallet.chainId,
+          cluster: wallet.cluster,
+          createdAt: now,
+          lastUsedAt: now,
+          expiresAt: now.add(const Duration(days: 7)),
+        );
+
+        await _multiSessionDataSource.saveWalletConnectSession(
+          walletId: walletId,
+          session: session,
+        );
+        await _multiSessionDataSource.setActiveWalletId(walletId);
+
+        AppLogger.wallet('MultiWallet: Session saved', data: {
+          'walletId': walletId,
+          'walletType': wallet.type.name,
+        });
+      } else if (wallet.type == WalletType.phantom) {
+        // Phantom session is saved by the adapter
+        final phantomSession = await _localDataSource.getPhantomSession();
+        if (phantomSession != null) {
+          await _multiSessionDataSource.savePhantomSession(
+            walletId: walletId,
+            session: phantomSession,
+          );
+          await _multiSessionDataSource.setActiveWalletId(walletId);
+
+          AppLogger.wallet('MultiWallet: Phantom session saved', data: {
+            'walletId': walletId,
+          });
+        }
+      }
+    } catch (e, st) {
+      AppLogger.e('Failed to save wallet session in MultiWallet', e, st);
+    }
+  }
+
+  /// Check if wallet type uses WalletConnect protocol
+  bool _isWalletConnectBased(WalletType type) {
+    return type == WalletType.walletConnect ||
+        type == WalletType.metamask ||
+        type == WalletType.trustWallet ||
+        type == WalletType.okxWallet ||
+        type == WalletType.coinbase ||
+        type == WalletType.rabby;
   }
 }
 
@@ -884,7 +1365,7 @@ final sessionAccountsProvider = Provider<SessionAccounts>((ref) {
   return streamData.when(
     data: (accounts) => accounts,
     loading: () => ref.read(walletServiceProvider).sessionAccounts,
-    error: (_, __) => ref.read(walletServiceProvider).sessionAccounts,
+    error: (_, _) => ref.read(walletServiceProvider).sessionAccounts,
   );
 });
 

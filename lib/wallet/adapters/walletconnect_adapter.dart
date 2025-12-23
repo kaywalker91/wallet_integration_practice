@@ -775,23 +775,14 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
     final relayConnected = await ensureRelayConnected();
 
     if (!relayConnected) {
-      AppLogger.wallet('Relay not connected, cannot restore sessions safely');
-      // Clear stale sessions to prevent infinite loop
-      // These sessions are useless without relay connectivity
-      for (final session in sessions) {
-        try {
-          AppLogger.wallet('Clearing stale session', data: {'topic': session.topic});
-          await _appKit!.disconnectSession(
-            topic: session.topic,
-            reason: const ReownSignError(
-              code: 6000,
-              message: 'Session expired due to relay disconnection',
-            ),
-          );
-        } catch (e) {
-          AppLogger.wallet('Failed to clear stale session', data: {'error': e.toString()});
-        }
-      }
+      AppLogger.wallet('Relay not connected, keeping sessions for later restoration', data: {
+        'sessionCount': sessions.length,
+      });
+      // DO NOT clear sessions here!
+      // Sessions should be preserved for later restoration attempts.
+      // The relay connection will be retried in restoreSessionByTopic()
+      // or when the user manually triggers a reconnection.
+      // Clearing sessions on temporary network issues causes permanent data loss.
       return;
     }
 
@@ -1395,6 +1386,86 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
   @override
   Future<String?> getConnectionUri() async {
     return _uri;
+  }
+
+  /// Get the current session topic for persistence
+  ///
+  /// Returns null if no session is currently active.
+  String? getSessionTopic() {
+    return _session?.topic;
+  }
+
+  /// Restore session by topic for app restart recovery
+  ///
+  /// This method is called when the app restarts and we have a persisted
+  /// session topic. It attempts to find and restore the session.
+  ///
+  /// Returns the connected WalletEntity if successful, null otherwise.
+  Future<WalletEntity?> restoreSessionByTopic(String sessionTopic) async {
+    if (_appKit == null) {
+      AppLogger.wallet('restoreSessionByTopic: AppKit not initialized');
+      return null;
+    }
+
+    AppLogger.wallet('Attempting to restore session by topic', data: {
+      'sessionTopic': sessionTopic.substring(0, 10),
+    });
+
+    // First ensure relay is connected with longer timeout for cold start
+    // Cold start may require more time for WebSocket connection
+    final relayConnected = await ensureRelayConnected(
+      timeout: const Duration(seconds: 10),
+    );
+    if (!relayConnected) {
+      AppLogger.wallet('restoreSessionByTopic: Relay not connected after extended timeout');
+      return null;
+    }
+
+    // Find the session with matching topic
+    final sessions = _appKit!.sessions.getAll();
+    final targetSession = sessions.where((s) => s.topic == sessionTopic).firstOrNull;
+
+    if (targetSession == null) {
+      AppLogger.wallet('Session not found in AppKit storage', data: {
+        'requestedTopic': sessionTopic.substring(0, 10),
+        'availableSessions': sessions.length,
+        'availableTopics': sessions.map((s) => s.topic.substring(0, 10)).toList(),
+      });
+      return null;
+    }
+
+    // Validate the session
+    if (!isSessionValid(targetSession)) {
+      AppLogger.wallet('Session found but invalid', data: {
+        'sessionTopic': sessionTopic.substring(0, 10),
+      });
+      return null;
+    }
+
+    // Session is valid, restore it
+    _session = targetSession;
+    _parseSessionAccounts();
+    _emitConnectionStatus();
+
+    AppLogger.wallet('Session restored by topic successfully', data: {
+      'address': connectedAddress,
+      'accountCount': _sessionAccounts.count,
+      'topic': _session!.topic.substring(0, 10),
+      'peerName': _session!.peer.metadata.name,
+    });
+
+    // Build and return the WalletEntity
+    if (connectedAddress == null) {
+      return null;
+    }
+
+    return WalletEntity(
+      address: connectedAddress!,
+      type: walletType,
+      chainId: currentChainId,
+      sessionTopic: _session!.topic,
+      connectedAt: DateTime.now(),
+    );
   }
 
   /// Clear all previous WalletConnect pairings and sessions.

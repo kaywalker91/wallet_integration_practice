@@ -19,6 +19,13 @@ class WalletConstants {
   static const String coinbasePackageAndroid = 'org.toshi';
   static const String coinbaseAppStoreId = '1278383455';
 
+  // OKX Wallet
+  // Deep link scheme is 'okxwallet://' (not 'okx://') per WalletConnect Explorer
+  static const String okxWalletDeepLink = 'okxwallet://';
+  static const String okxWalletUniversalLink = 'https://web3.okx.com/download';
+  static const String okxWalletPackageAndroid = 'com.okx.wallet';
+  static const String okxWalletAppStoreId = '1323975469';
+
   // Rainbow
   static const String rainbowDeepLink = 'rainbow://';
   static const String rainbowPackageAndroid = 'me.rainbow';
@@ -53,6 +60,7 @@ enum WalletType {
   metamask,
   walletConnect,
   coinbase,
+  okxWallet,
   trustWallet,
   rainbow,
   phantom,
@@ -69,6 +77,8 @@ extension WalletTypeExtension on WalletType {
         return 'WalletConnect';
       case WalletType.coinbase:
         return 'Coinbase Wallet';
+      case WalletType.okxWallet:
+        return 'OKX Wallet';
       case WalletType.trustWallet:
         return 'Trust Wallet';
       case WalletType.rainbow:
@@ -88,6 +98,8 @@ extension WalletTypeExtension on WalletType {
         return 'assets/icons/icon_walletconnect.png';
       case WalletType.coinbase:
         return 'assets/icons/icon_coinbasewallet.png';
+      case WalletType.okxWallet:
+        return 'assets/icons/icon_okxwallet.png';
       case WalletType.trustWallet:
         return 'assets/icons/icon_trustwallet.png';
       case WalletType.rainbow:
@@ -105,6 +117,8 @@ extension WalletTypeExtension on WalletType {
         return WalletConstants.metamaskDeepLink;
       case WalletType.coinbase:
         return WalletConstants.coinbaseDeepLink;
+      case WalletType.okxWallet:
+        return WalletConstants.okxWalletDeepLink;
       case WalletType.trustWallet:
         return WalletConstants.trustWalletDeepLink;
       case WalletType.rainbow:
@@ -123,6 +137,7 @@ extension WalletTypeExtension on WalletType {
       case WalletType.metamask:
       case WalletType.walletConnect:
       case WalletType.coinbase:
+      case WalletType.okxWallet:
       case WalletType.trustWallet:
       case WalletType.rainbow:
       case WalletType.rabby:
@@ -137,6 +152,7 @@ extension WalletTypeExtension on WalletType {
       case WalletType.phantom:
       case WalletType.coinbase:
       case WalletType.trustWallet:
+      case WalletType.okxWallet:
         return true;
       default:
         return false;

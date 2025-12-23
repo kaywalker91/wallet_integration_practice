@@ -5,12 +5,12 @@ import 'package:wallet_integration_practice/presentation/providers/wallet_provid
 
 /// Bottom sheet for selecting a wallet to connect
 class WalletSelector extends ConsumerWidget {
-  final Function(WalletInfo) onWalletSelected;
-
   const WalletSelector({
     super.key,
     required this.onWalletSelected,
   });
+
+  final Function(WalletInfo) onWalletSelected;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -53,7 +53,7 @@ class WalletSelector extends ConsumerWidget {
             child: ListView.separated(
               shrinkWrap: true,
               itemCount: wallets.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 8),
+              separatorBuilder: (_, _) => const SizedBox(height: 8),
               itemBuilder: (context, index) {
                 final wallet = wallets[index];
                 return _WalletListTile(
@@ -107,13 +107,13 @@ class WalletSelector extends ConsumerWidget {
 }
 
 class _WalletListTile extends StatelessWidget {
-  final WalletInfo wallet;
-  final VoidCallback onTap;
-
   const _WalletListTile({
     required this.wallet,
     required this.onTap,
   });
+
+  final WalletInfo wallet;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -193,10 +193,10 @@ class _WalletListTile extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 if (wallet.supportsEvm)
-                  _ChainBadge(label: 'EVM', color: Colors.blue),
+                  const _ChainBadge(label: 'EVM', color: Colors.blue),
                 if (wallet.supportsSolana) ...[
                   const SizedBox(width: 4),
-                  _ChainBadge(label: 'SOL', color: Colors.purple),
+                  const _ChainBadge(label: 'SOL', color: Colors.purple),
                 ],
               ],
             ),
@@ -213,13 +213,13 @@ class _WalletListTile extends StatelessWidget {
 }
 
 class _ChainBadge extends StatelessWidget {
-  final String label;
-  final Color color;
-
   const _ChainBadge({
     required this.label,
     required this.color,
   });
+
+  final String label;
+  final Color color;
 
   @override
   Widget build(BuildContext context) {

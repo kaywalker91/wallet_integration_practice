@@ -6,6 +6,8 @@ import 'package:pinenacl/api.dart';
 import 'package:pinenacl/tweetnacl.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wallet_integration_practice/core/core.dart';
+import 'package:wallet_integration_practice/data/datasources/local/wallet_local_datasource.dart';
+import 'package:wallet_integration_practice/data/models/phantom_session_model.dart';
 import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
 import 'package:wallet_integration_practice/domain/entities/transaction_entity.dart';
 import 'package:wallet_integration_practice/wallet/adapters/base_wallet_adapter.dart';
@@ -20,6 +22,13 @@ enum SigningOperationType {
 
 /// Phantom wallet adapter for Solana
 class PhantomAdapter extends SolanaWalletAdapter {
+  /// Constructor with optional dependency injection
+  PhantomAdapter({WalletLocalDataSource? localDataSource})
+      : _localDataSource = localDataSource;
+
+  /// Local data source for session persistence
+  WalletLocalDataSource? _localDataSource;
+
   bool _isInitialized = false;
   String? _connectedAddress;
   String? _session;
@@ -91,11 +100,132 @@ class PhantomAdapter extends SolanaWalletAdapter {
 
     AppLogger.wallet('Initializing Phantom adapter');
 
-    // Generate X25519 key pair for Phantom encryption
+    // 1. Try to restore session from storage first
+    final restored = await _tryRestoreFromStorage();
+    if (restored) {
+      AppLogger.wallet('Phantom session restored from storage');
+      _isInitialized = true;
+      return;
+    }
+
+    // 2. No saved session, generate new key pair
     _generateKeyPair();
 
     _isInitialized = true;
     AppLogger.wallet('Phantom adapter initialized');
+  }
+
+  /// Set local data source for session persistence
+  void setLocalDataSource(WalletLocalDataSource dataSource) {
+    _localDataSource = dataSource;
+  }
+
+  /// Try to restore session from secure storage
+  /// Returns true if restoration was successful
+  Future<bool> _tryRestoreFromStorage() async {
+    if (_localDataSource == null) return false;
+
+    try {
+      final saved = await _localDataSource!.getPhantomSession();
+      if (saved == null) {
+        AppLogger.wallet('No saved Phantom session found');
+        return false;
+      }
+
+      // Check if session is expired
+      if (saved.toEntity().isExpired) {
+        AppLogger.wallet('Phantom session expired, clearing');
+        await _localDataSource!.clearPhantomSession();
+        return false;
+      }
+
+      // Restore key pair from Base64
+      final privateKeyBytes = base64Decode(saved.dappPrivateKeyBase64);
+      _dappPrivateKey = PrivateKey(Uint8List.fromList(privateKeyBytes));
+      _dappPublicKey = _dappPrivateKey!.publicKey;
+      _phantomPublicKey = Uint8List.fromList(base64Decode(saved.phantomPublicKeyBase64));
+      _session = saved.session;
+      _connectedAddress = saved.connectedAddress;
+      _currentCluster = saved.cluster;
+
+      AppLogger.wallet('Phantom session restored', data: {
+        'address': _connectedAddress,
+        'cluster': _currentCluster,
+      });
+
+      return true;
+    } catch (e, st) {
+      AppLogger.e('Failed to restore Phantom session', e, st);
+      // Clear corrupted data
+      try {
+        await _localDataSource!.clearPhantomSession();
+      } catch (_) {}
+      return false;
+    }
+  }
+
+  /// Save session for persistence after successful connection
+  Future<void> _saveSessionForPersistence() async {
+    if (_localDataSource == null) {
+      AppLogger.wallet('No local data source, skipping session persistence');
+      return;
+    }
+
+    if (_dappPrivateKey == null || _phantomPublicKey == null || _connectedAddress == null) {
+      AppLogger.wallet('Missing required data for session persistence');
+      return;
+    }
+
+    try {
+      final now = DateTime.now();
+      final session = PhantomSessionModel(
+        dappPrivateKeyBase64: base64Encode(_dappPrivateKey!.toList()),
+        dappPublicKeyBase64: base64Encode(_dappPublicKey!.toList()),
+        phantomPublicKeyBase64: base64Encode(_phantomPublicKey!),
+        session: _session ?? '',
+        connectedAddress: _connectedAddress!,
+        cluster: _currentCluster ?? ChainConstants.solanaMainnet,
+        createdAt: now,
+        lastUsedAt: now,
+        expiresAt: now.add(const Duration(days: 7)),
+      );
+
+      await _localDataSource!.savePhantomSession(session);
+      AppLogger.wallet('Phantom session saved for persistence');
+    } catch (e, st) {
+      AppLogger.e('Failed to save Phantom session', e, st);
+    }
+  }
+
+  /// Restore session from storage and return wallet entity
+  /// This method can be called without triggering a new connect() flow
+  /// Returns null if no valid session is available
+  Future<WalletEntity?> restoreSession() async {
+    if (!_isInitialized) {
+      await initialize();
+    }
+
+    if (!isConnected) {
+      return null;
+    }
+
+    // Emit connection status
+    final wallet = WalletEntity(
+      address: _connectedAddress!,
+      type: walletType,
+      cluster: _currentCluster,
+      sessionTopic: _session,
+      connectedAt: DateTime.now(),
+    );
+
+    _connectionController.add(WalletConnectionStatus.connected(wallet));
+
+    // Update last used timestamp
+    try {
+      await _localDataSource?.updatePhantomSessionLastUsed();
+    } catch (_) {}
+
+    return wallet;
   }
 
   /// Generate X25519 key pair for Phantom deep link encryption
@@ -365,6 +495,9 @@ class PhantomAdapter extends SolanaWalletAdapter {
 
         _connectionController.add(WalletConnectionStatus.connected(wallet));
         AppLogger.wallet('Phantom connected', data: {'address': _connectedAddress});
+
+        // Save session for persistence (non-blocking)
+        unawaited(_saveSessionForPersistence());
       } else {
         throw const WalletException(
           message: 'Phantom에서 지갑 주소를 받지 못했습니다',
@@ -788,6 +921,11 @@ class PhantomAdapter extends SolanaWalletAdapter {
     _session = null;
     _phantomPublicKey = null;
     _connectionController.add(WalletConnectionStatus.disconnected());
+
+    // Clear persisted session (non-blocking)
+    unawaited(_localDataSource?.clearPhantomSession().catchError((e) {
+      AppLogger.e('Failed to clear Phantom session', e);
+    }));
 
     AppLogger.wallet('Phantom disconnected (local state cleared)');
   }

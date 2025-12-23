@@ -64,7 +64,7 @@
             <data android:mimeType="text/plain"/>
         </intent>
         <!-- Wallet app package visibility for canLaunchUrl -->
-        <!-- Supported: MetaMask, Trust Wallet, Phantom, Rabby -->
+        <!-- Supported: MetaMask, OKX Wallet, Trust Wallet, Phantom, Rabby -->
         <package android:name="io.metamask"/>
         <package android:name="app.phantom"/>
         <package android:name="com.wallet.crypto.trustapp"/>
@@ -72,6 +72,8 @@
         <!-- Coinbase Wallet packages -->
         <package android:name="com.coinbase.wallet"/>
         <package android:name="org.toshi"/>
+        <!-- OKX Wallet package -->
+        <package android:name="com.okx.wallet"/>
         <!-- Intent queries for wallet deep links (with proper categories for Android 11+) -->
         <intent>
             <action android:name="android.intent.action.VIEW"/>
@@ -96,6 +98,18 @@
             <category android:name="android.intent.category.DEFAULT"/>
             <category android:name="android.intent.category.BROWSABLE"/>
             <data android:scheme="rabby"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <category android:name="android.intent.category.DEFAULT"/>
+            <category android:name="android.intent.category.BROWSABLE"/>
+            <data android:scheme="okxwallet"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <category android:name="android.intent.category.DEFAULT"/>
+            <category android:name="android.intent.category.BROWSABLE"/>
+            <data android:scheme="okx"/>
         </intent>
         <intent>
             <action android:name="android.intent.action.VIEW"/>

@@ -31,7 +31,7 @@
 | WC-03 | Phantom 지갑 연동 (Solana) | P0 | ✅ 완료 |
 | WC-04 | Trust Wallet 연동 | P1 | ✅ 완료 |
 | WC-05 | QR 코드 기반 연결 UI | P0 | ✅ 완료 |
-| WC-06 | 다중 지갑 동시 연결 | P1 | 🔄 진행중 |
+| WC-06 | 다중 지갑 동시 연결 | P2 | ❌ 제외 (범위 축소) |
 | WC-07 | 세션 지속성 (앱 재시작 후 복원) | P1 | ⏳ 예정 |
 
 ### 2.2 체인 관리 (Chain Management)
@@ -180,7 +180,7 @@
 - [x] MetaMask Adapter 구현
 - [x] Phantom Adapter 구현
 - [x] Trust Wallet Adapter 구현
-- [ ] 다중 지갑 동시 연결 완성
+- [x] ~~다중 지갑 동시 연결 완성~~ (범위에서 제외)
 - [ ] 계정 선택 UI 완성
 
 ### Phase 3: Quality & Polish (예정)

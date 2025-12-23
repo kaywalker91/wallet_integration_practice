@@ -46,6 +46,8 @@ abstract class BalanceCacheDataSource {
 
 /// Implementation using SharedPreferences
 class BalanceCacheDataSourceImpl implements BalanceCacheDataSource {
+  BalanceCacheDataSourceImpl({required SharedPreferences prefs}) : _prefs = prefs;
+
   final SharedPreferences _prefs;
 
   /// Default cache TTL: 30 seconds
@@ -56,8 +58,6 @@ class BalanceCacheDataSourceImpl implements BalanceCacheDataSource {
   static const String _nativePrefix = '${_cachePrefix}native_';
   static const String _tokenPrefix = '${_cachePrefix}token_';
   static const String _tokenListPrefix = '${_cachePrefix}token_list_';
-
-  BalanceCacheDataSourceImpl({required SharedPreferences prefs}) : _prefs = prefs;
 
   /// Generate cache key for native balance
   String _nativeKey(String address, String chainIdentifier) =>

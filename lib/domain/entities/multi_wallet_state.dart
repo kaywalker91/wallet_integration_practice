@@ -6,6 +6,13 @@ import 'package:wallet_integration_practice/domain/entities/connected_wallet_ent
 /// This class manages a collection of [ConnectedWalletEntry] objects
 /// and tracks which wallet is currently active for operations.
 class MultiWalletState extends Equatable {
+  const MultiWalletState({
+    this.wallets = const [],
+    this.activeWalletId,
+    this.isLoading = false,
+    this.globalError,
+  });
+
   /// List of all wallet entries (connected, disconnected, or errored)
   final List<ConnectedWalletEntry> wallets;
 
@@ -17,13 +24,6 @@ class MultiWalletState extends Equatable {
 
   /// Global error message for operations affecting all wallets
   final String? globalError;
-
-  const MultiWalletState({
-    this.wallets = const [],
-    this.activeWalletId,
-    this.isLoading = false,
-    this.globalError,
-  });
 
   /// Get the currently active wallet entry
   ConnectedWalletEntry? get activeWallet {

@@ -13,12 +13,12 @@ import 'package:wallet_integration_practice/presentation/widgets/wallet/connecte
 /// 2. "+ Add Wallet" button is visible in header and triggers wallet selection
 /// 3. Empty state shows appropriate message and connect button
 class ConnectedWalletsSection extends ConsumerWidget {
-  final VoidCallback onConnectAnother;
-
   const ConnectedWalletsSection({
     super.key,
     required this.onConnectAnother,
   });
+
+  final VoidCallback onConnectAnother;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -67,13 +67,13 @@ class ConnectedWalletsSection extends ConsumerWidget {
 
 /// Section header with title and Add Wallet button
 class _SectionHeader extends StatelessWidget {
-  final int walletCount;
-  final VoidCallback onAddWallet;
-
   const _SectionHeader({
     required this.walletCount,
     required this.onAddWallet,
   });
+
+  final int walletCount;
+  final VoidCallback onAddWallet;
 
   @override
   Widget build(BuildContext context) {
@@ -137,9 +137,9 @@ class _SectionHeader extends StatelessWidget {
 }
 
 class _EmptyState extends StatelessWidget {
-  final VoidCallback onConnect;
-
   const _EmptyState({required this.onConnect});
+
+  final VoidCallback onConnect;
 
   @override
   Widget build(BuildContext context) {
@@ -192,12 +192,6 @@ class _EmptyState extends StatelessWidget {
 }
 
 class _WalletList extends StatelessWidget {
-  final List wallets;
-  final Function(String) onMakeActive;
-  final Function(String) onDisconnect;
-  final Function(String) onRetry;
-  final Function(String) onRemove;
-
   const _WalletList({
     required this.wallets,
     required this.onMakeActive,
@@ -205,6 +199,12 @@ class _WalletList extends StatelessWidget {
     required this.onRetry,
     required this.onRemove,
   });
+
+  final List wallets;
+  final Function(String) onMakeActive;
+  final Function(String) onDisconnect;
+  final Function(String) onRetry;
+  final Function(String) onRemove;
 
   @override
   Widget build(BuildContext context) {

@@ -10,12 +10,12 @@ import 'package:wallet_integration_practice/presentation/providers/wallet_provid
 import 'package:wallet_integration_practice/presentation/screens/home/home_screen.dart';
 
 class WalletConnectModal extends ConsumerStatefulWidget {
-  final WalletType walletType;
-
   const WalletConnectModal({
     super.key,
     this.walletType = WalletType.walletConnect,
   });
+
+  final WalletType walletType;
 
   @override
   ConsumerState<WalletConnectModal> createState() => _WalletConnectModalState();
@@ -52,7 +52,7 @@ class _WalletConnectModalState extends ConsumerState<WalletConnectModal> {
           );
       
       // Handle the result of the connection specifically for errors or completion
-      connectFuture.then((_) {
+      unawaited(connectFuture.then((_) {
         if (mounted) {
            _handleSuccess();
         }
@@ -62,7 +62,7 @@ class _WalletConnectModalState extends ConsumerState<WalletConnectModal> {
             _errorMessage = e.toString();
           });
         }
-      });
+      }));
 
       // Poll for URI
       _startUriPolling();
@@ -212,7 +212,7 @@ class _WalletConnectModalState extends ConsumerState<WalletConnectModal> {
             borderRadius: BorderRadius.circular(20),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.1),
+                color: Colors.black.withValues(alpha: 0.1),
                 blurRadius: 20,
                 offset: const Offset(0, 10),
               ),

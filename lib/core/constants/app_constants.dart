@@ -32,6 +32,8 @@ class AppConstants {
   static const String walletSessionKey = 'wallet_session';
   static const String connectedWalletKey = 'connected_wallet';
   static const String preferredChainKey = 'preferred_chain';
+  static const String persistedSessionKey = 'persisted_session_v1';
+  static const String phantomSessionKey = 'phantom_session_v1';
 
   // Timeouts
   // Extended from 60s to 120s to accommodate:
