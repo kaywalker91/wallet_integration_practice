@@ -226,4 +226,4 @@ lib/
 - [Flutter 문서](https://docs.flutter.dev/)
 - [WalletConnect v2 문서](https://docs.walletconnect.com/)
 - [Reown AppKit](https://docs.reown.com/)
-- [Phantom Deep Links](https://docs.phantom.app/solana/integrating-phantom/deep-linking)
+- [Phantom Deep Links](https://docs.phantom.app/solana/deep-links)
