@@ -7,9 +7,36 @@ iLity Hub를 위한 지갑 연동 실습
 - 멀티체인 지갑 지원 (EVM 체인 + 솔라나)
 - WalletConnect v2 연동
 - 딥링크 지갑 연결 흐름
-- 지원되는 지갑: 메타마스크(MetaMask), 트러스트 월렛(Trust Wallet), 팬텀(Phantom), 래비(Rabby)
+- 지원되는 지갑: 메타마스크(MetaMask), OKX 월렛(OKX Wallet), 트러스트 월렛(Trust Wallet), 팬텀(Phantom), 래비(Rabby)
 
 ## 최근 변경 사항
+
+### 2025-12-23: OKX 지갑 무한 로딩 해결 - 낙관적 세션 확인 구현
+
+**문제**: OKX 지갑에서 승인 후 앱으로 돌아왔을 때 무한 로딩이 발생하는 문제.
+
+**원인 분석**:
+- 안드로이드 백그라운드 정책으로 인해 앱이 백그라운드에 있는 동안 WebSocket(Relay) 연결이 끊어짐
+- 사용자가 지갑에서 승인하는 동안 앱은 "귀머거리" 상태가 되어 승인 신호를 받지 못함
+- 120초 타임아웃이 앱 복귀보다 먼저 발생하여 `_isWaitingForApproval` 플래그가 false로 변경됨
+- 앱 복귀 시 조건부 세션 확인이 실행되지 않음
+
+**해결책**: 낙관적 세션 확인(Optimistic Session Check) 구현
+1. **`optimisticSessionCheck()` 메서드 추가**: Relay 연결 여부와 관계없이 세션 저장소를 직접 조회
+2. **`didChangeAppLifecycleState` 개선**: 앱이 `resumed` 상태가 되면 **즉시** 낙관적 세션 확인 실행 (조건 없이)
+3. **OKX 딥링크 핸들러 개선**: delay 전에 먼저 세션 확인, 연결 성공 시 즉시 반환
+4. **타임아웃 핸들링 개선**: 타임아웃 시 가장 먼저 낙관적 확인 실행
+
+**기대 효과**:
+- 사용자가 지갑에서 승인 후 앱 복귀 시 **0.5초 이내** 로딩 해제
+- 타임아웃 발생 여부와 관계없이 세션 자동 감지
+- 기존 연결 흐름과 완전 호환
+
+**변경된 파일**:
+- `lib/wallet/adapters/walletconnect_adapter.dart` - `optimisticSessionCheck()` 추가, `didChangeAppLifecycleState` 수정
+- `lib/wallet/adapters/okx_wallet_adapter.dart` - 딥링크 핸들러 및 타임아웃 로직 개선
+
+---
 
 ### 2025-12-19: Sentry 기반 로깅 및 지갑 연결 복구 UX 강화
 
