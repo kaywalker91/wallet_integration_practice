@@ -441,7 +441,42 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
         currentWalletName: null,
       );
 
-      // 5. Set the active wallet state
+      // 5. Fallback: Try restoring Phantom from legacy storage if not in multi-session
+      final restoredWalletsState = ref.read(multiWalletNotifierProvider);
+      final hasPhantom = restoredWalletsState.wallets.any(
+        (entry) => entry.wallet.type == WalletType.phantom,
+      );
+      if (!hasPhantom) {
+        final phantomSession = await _localDataSource.getPhantomSession();
+        if (phantomSession != null && !phantomSession.toEntity().isExpired) {
+          AppLogger.wallet('Attempting fallback Phantom restoration from legacy storage');
+
+          final adapter = await _walletService.initializeAdapter(WalletType.phantom);
+          if (adapter is PhantomAdapter) {
+            adapter.setLocalDataSource(_localDataSource);
+            final phantomWallet = await adapter.restoreSession();
+
+            if (phantomWallet != null) {
+              _walletService.setActiveAdapter(adapter, phantomWallet);
+
+              // Save to MultiSessionDataSource for future
+              await _multiSessionDataSource.savePhantomSession(
+                walletId: 'phantom_${phantomWallet.address.substring(0, 8)}',
+                session: phantomSession,
+              );
+
+              ref.read(multiWalletNotifierProvider.notifier).registerWallet(phantomWallet);
+              activeWallet ??= phantomWallet;
+
+              AppLogger.wallet('Phantom session restored from fallback', data: {
+                'address': phantomWallet.address,
+              });
+            }
+          }
+        }
+      }
+
+      // 6. Set the active wallet state
       if (activeWallet != null) {
         state = AsyncValue.data(activeWallet);
         AppLogger.wallet('Active wallet restored', data: {
@@ -687,6 +722,15 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
     });
 
     try {
+      // Set localDataSource on PhantomAdapter before connection
+      // This ensures session can be saved when deep link callback returns
+      if (walletType == WalletType.phantom) {
+        final adapter = await _walletService.initializeAdapter(WalletType.phantom);
+        if (adapter is PhantomAdapter) {
+          adapter.setLocalDataSource(_localDataSource);
+        }
+      }
+
       // Start connection - don't await the result directly
       // The stream will tell us the final outcome
       unawaited(
@@ -733,8 +777,8 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
       // [WalletLogService] End connection successfully
       WalletLogService.instance.endConnection(success: true);
 
-      // Save session for persistence (non-blocking)
-      unawaited(_saveSessionForPersistence(wallet));
+      // Save session for persistence (blocking to ensure data is saved before app exit)
+      await _saveSessionForPersistence(wallet);
 
       state = AsyncValue.data(wallet);
     } catch (e, st) {
@@ -1027,6 +1071,15 @@ class MultiWalletNotifier extends Notifier<MultiWalletState> {
     );
 
     try {
+      // Set localDataSource on PhantomAdapter before connection
+      // This ensures session can be saved when deep link callback returns
+      if (walletType == WalletType.phantom) {
+        final adapter = await _walletService.initializeAdapter(WalletType.phantom);
+        if (adapter is PhantomAdapter) {
+          adapter.setLocalDataSource(_localDataSource);
+        }
+      }
+
       // Start connection - don't await, stream is source of truth
       unawaited(_walletService
           .connect(

@@ -291,11 +291,11 @@ class MultiSessionDataSourceImpl implements MultiSessionDataSource {
             migrated = true;
           }
 
-          // Clear legacy data after migration
-          await _secureStorage.delete(key: AppConstants.persistedSessionKey);
+          // Keep legacy data as backup (don't delete)
+          // await _secureStorage.delete(key: AppConstants.persistedSessionKey);
         } catch (e) {
-          // Failed to parse legacy session, clear it
-          await _secureStorage.delete(key: AppConstants.persistedSessionKey);
+          // Keep legacy data even on parse error (don't delete for fallback)
+          // await _secureStorage.delete(key: AppConstants.persistedSessionKey);
         }
       }
 
@@ -328,11 +328,11 @@ class MultiSessionDataSourceImpl implements MultiSessionDataSource {
             migrated = true;
           }
 
-          // Clear legacy data after migration
-          await _secureStorage.delete(key: AppConstants.phantomSessionKey);
+          // Keep legacy data as backup (don't delete)
+          // await _secureStorage.delete(key: AppConstants.phantomSessionKey);
         } catch (e) {
-          // Failed to parse legacy session, clear it
-          await _secureStorage.delete(key: AppConstants.phantomSessionKey);
+          // Keep legacy data even on parse error (don't delete for fallback)
+          // await _secureStorage.delete(key: AppConstants.phantomSessionKey);
         }
       }
 

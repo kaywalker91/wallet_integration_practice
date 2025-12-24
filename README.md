@@ -18,6 +18,27 @@ iLity Hub를 위한 지갑 연동 실습
 
 ## 최근 변경 사항
 
+### 2025-12-24: Phantom 지갑 레거시 세션 마이그레이션 및 복원 강화
+
+**기능**: 기존 단일 세션 저장소에 저장된 Phantom 지갑 데이터를 새로운 Multi-Session 아키텍처로 안전하게 이관하고, 앱 재시작 시 복원 안정성을 강화했습니다.
+
+**주요 개선 사항**:
+1.  **레거시 세션 마이그레이션**:
+    *   `MultiSessionDataSource`에 마이그레이션 로직 추가: 앱 초기화 시 기존 `phantom_session_v1` 키에 저장된 세션이 있으면 Multi-Session 저장소로 자동 이관.
+    *   기존 사용자들의 로그인 상태 유지 보장.
+2.  **Phantom 어댑터 복원 로직 개선**:
+    *   `PhantomAdapter`가 초기화 시점에 `localDataSource`가 주입되지 않았더라도, 이후 `restoreSession()` 호출 시 지연된 복원을 시도하도록 수정.
+    *   `WalletNotifier`에서 Multi-Session 저장소에 데이터가 없더라도, 레거시 저장소를 확인하여 Phantom 세션을 복구하는 2차 방어선(Fallback) 구축.
+3.  **데이터 동기화**:
+    *   Phantom 연결/복원 성공 시 레거시 저장소와 Multi-Session 저장소 양쪽에 데이터를 동기화하여 호환성 확보.
+
+**변경된 파일**:
+- `lib/data/datasources/local/multi_session_datasource.dart`: 마이그레이션 로직 구현
+- `lib/presentation/providers/wallet_provider.dart`: 복원 및 마이그레이션 오케스트레이션
+- `lib/wallet/adapters/phantom_adapter.dart`: 지연된 복원(Late Restoration) 지원 및 세션 관리 강화
+
+---
+
 ### 2025-12-24: 세션 복원 UX 개선 (Skeleton UI & Splash)
 
 **기능**: 앱 Cold Start 시 저장된 세션 복원 과정을 시각적으로 표시하여 사용자 경험을 크게 개선했습니다.

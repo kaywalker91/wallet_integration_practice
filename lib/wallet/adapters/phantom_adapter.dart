@@ -200,32 +200,65 @@ class PhantomAdapter extends SolanaWalletAdapter {
   /// Restore session from storage and return wallet entity
   /// This method can be called without triggering a new connect() flow
   /// Returns null if no valid session is available
+  ///
+  /// Note: This method handles the case where setLocalDataSource() was called
+  /// after initialize(). In that case, _tryRestoreFromStorage() would have
+  /// returned false during initialize() because _localDataSource was null.
+  /// We retry restoration here if localDataSource is now available.
   Future<WalletEntity?> restoreSession() async {
     if (!_isInitialized) {
       await initialize();
     }
 
-    if (!isConnected) {
-      return null;
+    // Already connected - return immediately
+    if (isConnected) {
+      final wallet = WalletEntity(
+        address: _connectedAddress!,
+        type: walletType,
+        cluster: _currentCluster,
+        sessionTopic: _session,
+        connectedAt: DateTime.now(),
+      );
+
+      _connectionController.add(WalletConnectionStatus.connected(wallet));
+
+      // Update last used timestamp
+      try {
+        await _localDataSource?.updatePhantomSessionLastUsed();
+      } catch (_) {}
+
+      return wallet;
     }
 
-    // Emit connection status
-    final wallet = WalletEntity(
-      address: _connectedAddress!,
-      type: walletType,
-      cluster: _currentCluster,
-      sessionTopic: _session,
-      connectedAt: DateTime.now(),
-    );
+    // Not connected yet - try to restore from storage if localDataSource is available
+    // This handles the case where setLocalDataSource() was called after initialize()
+    if (_localDataSource != null) {
+      AppLogger.wallet('Attempting late session restoration from storage');
+      final restored = await _tryRestoreFromStorage();
 
-    _connectionController.add(WalletConnectionStatus.connected(wallet));
+      if (restored && _connectedAddress != null) {
+        final wallet = WalletEntity(
+          address: _connectedAddress!,
+          type: walletType,
+          cluster: _currentCluster,
+          sessionTopic: _session,
+          connectedAt: DateTime.now(),
+        );
 
-    // Update last used timestamp
-    try {
-      await _localDataSource?.updatePhantomSessionLastUsed();
-    } catch (_) {}
+        _connectionController.add(WalletConnectionStatus.connected(wallet));
 
-    return wallet;
+        AppLogger.wallet('Late session restoration successful', data: {
+          'address': _connectedAddress,
+          'cluster': _currentCluster,
+        });
+
+        return wallet;
+      }
+    }
+
+    // No valid session available
+    AppLogger.wallet('Phantom session restoration failed - no valid session');
+    return null;
   }
 
   /// Generate X25519 key pair for Phantom deep link encryption
@@ -489,15 +522,16 @@ class PhantomAdapter extends SolanaWalletAdapter {
           connectedAt: DateTime.now(),
         );
 
-        // Complete the completer to unblock connect()
+        // Save session for persistence FIRST (blocking)
+        // This ensures MultiSessionDataSource can access the session in _onConnectionChanged()
+        await _saveSessionForPersistence();
+
+        // Then complete the completer to unblock connect()
         _connectionCompleter?.complete(wallet);
         _connectionCompleter = null;
 
         _connectionController.add(WalletConnectionStatus.connected(wallet));
         AppLogger.wallet('Phantom connected', data: {'address': _connectedAddress});
-
-        // Save session for persistence (non-blocking)
-        unawaited(_saveSessionForPersistence());
       } else {
         throw const WalletException(
           message: 'Phantom에서 지갑 주소를 받지 못했습니다',
