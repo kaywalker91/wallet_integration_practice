@@ -18,6 +18,40 @@ iLity Hub를 위한 지갑 연동 실습
 
 ## 최근 변경 사항
 
+### 2025-12-24: 세션 복원 UX 개선 (Skeleton UI & Splash)
+
+**기능**: 앱 Cold Start 시 저장된 세션 복원 과정을 시각적으로 표시하여 사용자 경험을 크게 개선했습니다.
+
+**주요 개선 사항**:
+1.  **Session Restoration Provider**:
+    *   `SessionRestorationState` 및 `SessionRestorationNotifier`를 통해 복원 상태(checking, restoring, completed, failed) 추적.
+    *   복원 진행률, 현재 복원 중인 지갑 이름, 타임아웃 관리 지원.
+2.  **Session Restoration Splash**:
+    *   전체 화면 스플래시로 복원 진행 상태 표시.
+    *   펄스 로고 애니메이션, 진행률 바(determinate/indeterminate), 상태 텍스트.
+    *   10초 이상 소요 시 "건너뛰기" 버튼 표시.
+3.  **Skeleton UI 위젯**:
+    *   `WalletCardSkeleton`: WalletCard의 스켈레톤 버전으로 로딩 중 표시.
+    *   `ConnectedWalletsSkeleton`: ConnectedWalletsSection의 스켈레톤 버전.
+4.  **Shimmer 위젯 라이브러리**:
+    *   `ShimmerBox`, `ShimmerText`, `ShimmerAvatar`, `ShimmerCard`, `ShimmerIcon` 등 재사용 가능한 shimmer 효과 위젯.
+5.  **부드러운 전환 애니메이션**:
+    *   `AnimatedSwitcher`를 사용하여 스플래시→홈 화면, 스켈레톤→실제 컨텐츠 전환을 부드럽게 처리.
+    *   fade + slide 조합으로 자연스러운 전환 효과.
+
+**변경된 파일**:
+- `lib/main.dart` - 세션 복원 상태 기반 화면 라우팅 로직
+- `lib/presentation/providers/wallet_provider.dart` - 복원 진행률 업데이트
+- `lib/presentation/providers/session_restoration_provider.dart` (신규) - 복원 상태 관리
+- `lib/presentation/screens/home/home_screen.dart` - 스켈레톤 UI 적용
+- `lib/presentation/widgets/splash/session_restoration_splash.dart` (신규)
+- `lib/presentation/widgets/common/shimmer.dart` (신규)
+- `lib/presentation/widgets/wallet/wallet_card_skeleton.dart` (신규)
+- `lib/presentation/widgets/wallet/connected_wallets_skeleton.dart` (신규)
+- `lib/presentation/presentation.dart` - 배럴 export 추가
+
+---
+
 ### 2025-12-23: Phantom 지갑 SIWS (Sign In With Solana) 자동 트리거 구현
 
 - **기능**: Phantom 지갑 연결 성공 직후, 자동으로 `signInWithSolana`를 호출하여 지갑 소유권을 암호학적으로 증명합니다.

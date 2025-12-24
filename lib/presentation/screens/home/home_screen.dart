@@ -5,10 +5,13 @@ import 'package:wallet_integration_practice/domain/entities/transaction_entity.d
 import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
 import 'package:wallet_integration_practice/presentation/providers/wallet_provider.dart';
 import 'package:wallet_integration_practice/presentation/providers/balance_provider.dart';
+import 'package:wallet_integration_practice/presentation/providers/session_restoration_provider.dart';
 import 'package:wallet_integration_practice/presentation/screens/onboarding/onboarding_loading_page.dart';
 import 'package:wallet_integration_practice/presentation/widgets/wallet/wallet_card.dart';
+import 'package:wallet_integration_practice/presentation/widgets/wallet/wallet_card_skeleton.dart';
 import 'package:wallet_integration_practice/presentation/widgets/wallet/wallet_selector.dart';
 import 'package:wallet_integration_practice/presentation/widgets/wallet/connected_wallets_section.dart';
+import 'package:wallet_integration_practice/presentation/widgets/wallet/connected_wallets_skeleton.dart';
 import 'package:wallet_integration_practice/presentation/pages/wallet_connect_modal.dart';
 
 /// Main home screen
@@ -48,47 +51,62 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               Consumer(
                 builder: (context, ref, _) {
                   final activeEntry = ref.watch(activeWalletEntryProvider);
+                  final isRestoring = ref.watch(isRestoringSessionsProvider);
 
-                  if (activeEntry != null) {
-                    final wallet = activeEntry.wallet;
-
-                    // Get token symbol from wallet's own chainId/cluster
-                    final tokenSymbol = _getTokenSymbol(wallet);
-
-                    // Watch actual balance from blockchain
-                    final balanceAsync = ref.watch(currentChainBalanceProvider);
-
-                    // Log for debugging
-                    AppLogger.d(
-                        '[DEBUG] HomeScreen: balanceAsync state = ${balanceAsync.isLoading ? "loading" : balanceAsync.hasError ? "error" : "data"}');
-
-                    final balance = balanceAsync.whenOrNull(
-                      data: (entity) {
-                        AppLogger.d(
-                            '[DEBUG] HomeScreen: balance entity = $entity');
-                        return entity?.balanceFormatted;
-                      },
-                    );
-
-                    return WalletCard(
-                      wallet: wallet,
-                      onDisconnect: () =>
-                          _disconnectActiveWallet(activeEntry.id),
-                      // Chain switching removed - wallet auto-connects to default chain
-                      balance: balance,
-                      tokenSymbol: tokenSymbol,
-                      onSignMessage: () => _signMessage(context),
-                    );
-                  }
-                  return const SizedBox.shrink();
+                  // 복원 중이면 스켈레톤 표시
+                  return AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 400),
+                    switchInCurve: Curves.easeOutCubic,
+                    switchOutCurve: Curves.easeInCubic,
+                    transitionBuilder: (child, animation) {
+                      return FadeTransition(
+                        opacity: animation,
+                        child: SlideTransition(
+                          position: Tween<Offset>(
+                            begin: const Offset(0, 0.05),
+                            end: Offset.zero,
+                          ).animate(CurvedAnimation(
+                            parent: animation,
+                            curve: Curves.easeOutCubic,
+                          )),
+                          child: child,
+                        ),
+                      );
+                    },
+                    child: isRestoring
+                        ? const WalletCardSkeleton(key: ValueKey('skeleton'))
+                        : activeEntry != null
+                            ? _buildWalletCard(activeEntry)
+                            : const SizedBox.shrink(key: ValueKey('empty')),
+                  );
                 },
               ),
 
               const SizedBox(height: 16),
 
               // 2. Connected wallets section (multi-wallet list)
-              ConnectedWalletsSection(
-                onConnectAnother: () => _showWalletSelector(context),
+              Consumer(
+                builder: (context, ref, _) {
+                  final isRestoring = ref.watch(isRestoringSessionsProvider);
+
+                  return AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 400),
+                    switchInCurve: Curves.easeOutCubic,
+                    switchOutCurve: Curves.easeInCubic,
+                    transitionBuilder: (child, animation) {
+                      return FadeTransition(
+                        opacity: animation,
+                        child: child,
+                      );
+                    },
+                    child: isRestoring
+                        ? const ConnectedWalletsSkeleton(key: ValueKey('skeleton'))
+                        : ConnectedWalletsSection(
+                            key: const ValueKey('section'),
+                            onConnectAnother: () => _showWalletSelector(context),
+                          ),
+                  );
+                },
               ),
 
               const SizedBox(height: 16),
@@ -96,6 +114,37 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildWalletCard(dynamic activeEntry) {
+    final wallet = activeEntry.wallet;
+
+    // Get token symbol from wallet's own chainId/cluster
+    final tokenSymbol = _getTokenSymbol(wallet);
+
+    // Watch actual balance from blockchain
+    final balanceAsync = ref.watch(currentChainBalanceProvider);
+
+    // Log for debugging
+    AppLogger.d(
+        '[DEBUG] HomeScreen: balanceAsync state = ${balanceAsync.isLoading ? "loading" : balanceAsync.hasError ? "error" : "data"}');
+
+    final balance = balanceAsync.whenOrNull(
+      data: (entity) {
+        AppLogger.d('[DEBUG] HomeScreen: balance entity = $entity');
+        return entity?.balanceFormatted;
+      },
+    );
+
+    return WalletCard(
+      key: ValueKey(activeEntry.id),
+      wallet: wallet,
+      onDisconnect: () => _disconnectActiveWallet(activeEntry.id),
+      // Chain switching removed - wallet auto-connects to default chain
+      balance: balance,
+      tokenSymbol: tokenSymbol,
+      onSignMessage: () => _signMessage(context),
     );
   }
 

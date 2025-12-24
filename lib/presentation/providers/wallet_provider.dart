@@ -12,6 +12,7 @@ import 'package:wallet_integration_practice/domain/entities/multi_session_state.
 import 'package:wallet_integration_practice/domain/entities/session_account.dart';
 import 'package:wallet_integration_practice/wallet/wallet.dart';
 import 'package:wallet_integration_practice/presentation/providers/balance_provider.dart';
+import 'package:wallet_integration_practice/presentation/providers/session_restoration_provider.dart';
 
 /// Sentry 서비스 인스턴스 (편의를 위한 getter)
 SentryService get _sentry => SentryService.instance;
@@ -185,8 +186,9 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
 
   @override
   AsyncValue<WalletEntity?> build() {
-    // Initialize on build
-    _init();
+    // Defer initialization to after build completes
+    // This avoids Riverpod's "providers cannot modify other providers during initialization" error
+    Future.microtask(() => _init());
 
     // Cleanup on dispose
     ref.onDispose(() {
@@ -308,6 +310,10 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
   Future<void> _init() async {
     AppLogger.wallet('WalletNotifier._init() called - starting wallet initialization');
 
+    // Start session restoration tracking
+    final restorationNotifier = ref.read(sessionRestorationProvider.notifier);
+    restorationNotifier.startChecking();
+
     // Initialize wallet service (also registers deep link handlers)
     await _walletService.initialize();
 
@@ -325,6 +331,9 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
       // schedule a delayed retry for cases where network is slow to connect
       _scheduleDelayedRestoration();
     }
+
+    // Mark restoration as complete
+    restorationNotifier.complete();
 
     // Subscribe to deep link stream for logging
     _deepLinkSubscription = DeepLinkService.instance.deepLinkStream.listen((uri) {
@@ -369,6 +378,8 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
 
   /// Migrate legacy sessions and restore all persisted sessions
   Future<void> _migrateAndRestoreAllSessions() async {
+    final restorationNotifier = ref.read(sessionRestorationProvider.notifier);
+
     try {
       // 1. Migrate legacy single-session data to multi-session format
       final migrated = await _multiSessionDataSource.migrateLegacySessions();
@@ -386,6 +397,7 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
       final sessionState = await _multiSessionDataSource.getAllSessions();
       if (sessionState.isEmpty) {
         AppLogger.wallet('No persisted sessions found');
+        restorationNotifier.completeNoSessions();
         return;
       }
 
@@ -394,9 +406,21 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
         'activeWalletId': sessionState.activeWalletId,
       });
 
-      // 4. Restore each session
+      // Begin restoration phase with total session count
+      restorationNotifier.beginRestoration(totalSessions: sessionState.count);
+
+      // 4. Restore each session with progress updates
       WalletEntity? activeWallet;
+      var restoredCount = 0;
+
       for (final entry in sessionState.sessionList) {
+        // Update progress with current wallet name
+        final walletTypeName = _getWalletTypeName(entry);
+        restorationNotifier.updateProgress(
+          restoredCount: restoredCount,
+          currentWalletName: walletTypeName,
+        );
+
         final wallet = await _restoreSessionEntry(entry);
         if (wallet != null) {
           // Register with MultiWalletNotifier
@@ -407,7 +431,15 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
             activeWallet = wallet;
           }
         }
+
+        restoredCount++;
       }
+
+      // Final progress update
+      restorationNotifier.updateProgress(
+        restoredCount: restoredCount,
+        currentWalletName: null,
+      );
 
       // 5. Set the active wallet state
       if (activeWallet != null) {
@@ -419,7 +451,25 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
       }
     } catch (e, st) {
       AppLogger.e('Failed to restore multi-wallet sessions', e, st);
+      restorationNotifier.fail(e.toString());
     }
+  }
+
+  /// Get wallet type name from session entry for display
+  String _getWalletTypeName(dynamic entry) {
+    if (entry.sessionType == SessionType.walletConnect) {
+      final wcSession = entry.walletConnectSession;
+      if (wcSession != null) {
+        final walletType = WalletType.values.firstWhere(
+          (t) => t.name == wcSession.walletType,
+          orElse: () => WalletType.walletConnect,
+        );
+        return walletType.displayName;
+      }
+    } else if (entry.sessionType == SessionType.phantom) {
+      return WalletType.phantom.displayName;
+    }
+    return 'Wallet';
   }
 
   /// Restore a single session entry

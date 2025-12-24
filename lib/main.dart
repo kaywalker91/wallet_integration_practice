@@ -271,10 +271,11 @@ class _WalletIntegrationAppState extends State<WalletIntegrationApp>
   }
 }
 
-/// 앱 시작 시 대기 중 연결 확인 및 적절한 화면으로 라우팅
+/// 앱 시작 시 세션 복원 및 적절한 화면으로 라우팅
 ///
-/// Cold Start 시 이전에 저장된 대기 중 연결이 있으면
-/// OnboardingLoadingPage로 자동 네비게이션합니다.
+/// 1. 세션 복원 중: SessionRestorationSplash 표시
+/// 2. 대기 중 연결 있음: OnboardingLoadingPage로 네비게이션
+/// 3. 복원 완료: HomeScreen으로 부드러운 전환
 class _AppStartupHandler extends ConsumerStatefulWidget {
   const _AppStartupHandler();
 
@@ -283,11 +284,16 @@ class _AppStartupHandler extends ConsumerStatefulWidget {
 }
 
 class _AppStartupHandlerState extends ConsumerState<_AppStartupHandler> {
+  bool _hasPendingConnection = false;
+  WalletType? _pendingWalletType;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkPendingConnection();
+      // Trigger WalletNotifier initialization to start session restoration
+      ref.read(walletNotifierProvider);
     });
   }
 
@@ -297,19 +303,52 @@ class _AppStartupHandlerState extends ConsumerState<_AppStartupHandler> {
 
     if (pendingWalletType != null) {
       AppLogger.i('Found pending connection for: ${pendingWalletType.name}');
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (context) => OnboardingLoadingPage(
-            walletType: pendingWalletType,
-            isRestoring: true, // Skip re-initiating connection, just wait for session
-          ),
-        ),
-      );
+      setState(() {
+        _hasPendingConnection = true;
+        _pendingWalletType = pendingWalletType;
+      });
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return const HomeScreen();
+    // 대기 중 연결이 있으면 OnboardingLoadingPage로 이동
+    if (_hasPendingConnection && _pendingWalletType != null) {
+      return OnboardingLoadingPage(
+        walletType: _pendingWalletType!,
+        isRestoring: true,
+      );
+    }
+
+    // 세션 복원 상태 확인
+    final appInitialized = ref.watch(appInitializedProvider);
+
+    // 복원 중이면 스플래시 표시
+    if (!appInitialized) {
+      return const SessionRestorationSplash();
+    }
+
+    // 복원 완료 후 HomeScreen으로 부드럽게 전환
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 400),
+      switchInCurve: Curves.easeOutCubic,
+      switchOutCurve: Curves.easeInCubic,
+      transitionBuilder: (child, animation) {
+        return FadeTransition(
+          opacity: animation,
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0, 0.02),
+              end: Offset.zero,
+            ).animate(CurvedAnimation(
+              parent: animation,
+              curve: Curves.easeOutCubic,
+            )),
+            child: child,
+          ),
+        );
+      },
+      child: const HomeScreen(key: ValueKey('home')),
+    );
   }
 }
