@@ -135,7 +135,22 @@ class ConnectionRecoveryState {
     this.connectionUri,
     this.walletType,
     this.shownAt,
+    this.isCheckingOnResume = false,
+    this.checkingMessage,
   });
+
+  /// Factory for soft timeout checking state
+  factory ConnectionRecoveryState.checkingAfterResume({
+    required WalletType walletType,
+    String? connectionUri,
+  }) {
+    return ConnectionRecoveryState(
+      isCheckingOnResume: true,
+      walletType: walletType,
+      connectionUri: connectionUri,
+      checkingMessage: '연결 확인 중...',
+    );
+  }
 
   /// Whether to show recovery options UI
   final bool showRecoveryOptions;
@@ -149,22 +164,32 @@ class ConnectionRecoveryState {
   /// Time when recovery options were shown
   final DateTime? shownAt;
 
+  /// Whether we're checking for session after resume from soft timeout
+  final bool isCheckingOnResume;
+
+  /// Message to display during checking
+  final String? checkingMessage;
+
+  /// Reset to initial state
+  static const empty = ConnectionRecoveryState();
+
   ConnectionRecoveryState copyWith({
     bool? showRecoveryOptions,
     String? connectionUri,
     WalletType? walletType,
     DateTime? shownAt,
+    bool? isCheckingOnResume,
+    String? checkingMessage,
   }) {
     return ConnectionRecoveryState(
       showRecoveryOptions: showRecoveryOptions ?? this.showRecoveryOptions,
       connectionUri: connectionUri ?? this.connectionUri,
       walletType: walletType ?? this.walletType,
       shownAt: shownAt ?? this.shownAt,
+      isCheckingOnResume: isCheckingOnResume ?? this.isCheckingOnResume,
+      checkingMessage: checkingMessage ?? this.checkingMessage,
     );
   }
-
-  /// Reset to initial state
-  static const empty = ConnectionRecoveryState();
 }
 
 /// Notifier for wallet operations (Riverpod 3.0 - extends Notifier)
@@ -195,6 +220,8 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
     ref.onDispose(() {
       _deepLinkSubscription?.cancel();
       _connectivitySubscription?.cancel();
+      _softTimeoutRecoverySubscription?.cancel();
+      _softTimeoutRecoveryTimer?.cancel();
       ConnectivityService.instance.stopMonitoring();
       _cancelApprovalTimeout();
     });
@@ -229,6 +256,102 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
   void _cancelApprovalTimeout() {
     _approvalTimeoutTimer?.cancel();
     _approvalTimeoutTimer = null;
+  }
+
+  /// Timer for soft timeout recovery window
+  Timer? _softTimeoutRecoveryTimer;
+
+  /// Subscription for soft timeout recovery
+  StreamSubscription<WalletConnectionStatus>? _softTimeoutRecoverySubscription;
+
+  /// Set up listener for session recovery after soft timeout
+  void _setupSoftTimeoutRecoveryListener(
+    WalletType walletType,
+    int? chainId,
+    String? cluster,
+  ) {
+    // Cancel any existing subscription
+    _softTimeoutRecoverySubscription?.cancel();
+
+    AppLogger.wallet('Setting up soft timeout recovery listener', data: {
+      'walletType': walletType.name,
+      'recoveryWindow': AppConstants.postSoftTimeoutRecoveryWindow.inSeconds,
+    });
+
+    // Listen for connection status changes
+    _softTimeoutRecoverySubscription = _walletService.connectionStream.listen((status) {
+      if (status.isConnected && status.wallet != null) {
+        AppLogger.wallet('Soft timeout recovery: Session found!', data: {
+          'address': status.wallet!.address,
+        });
+
+        // Cancel recovery timer
+        _softTimeoutRecoveryTimer?.cancel();
+
+        // Reset recovery state
+        ref.read(connectionRecoveryProvider.notifier).reset();
+
+        // Update state with connected wallet
+        state = AsyncValue.data(status.wallet);
+
+        // Save session for persistence
+        unawaited(_saveSessionForPersistence(status.wallet!));
+
+        // Track success
+        _sentry.trackWalletConnectionSuccess(
+          walletType: status.wallet!.type.name,
+          address: status.wallet!.address,
+          chainId: status.wallet!.chainId,
+          cluster: status.wallet!.cluster,
+        );
+
+        WalletLogService.instance.endConnection(success: true);
+
+        // Clean up subscription
+        _softTimeoutRecoverySubscription?.cancel();
+        _softTimeoutRecoverySubscription = null;
+      }
+    });
+
+    // Set up timeout for recovery window
+    _softTimeoutRecoveryTimer?.cancel();
+    _softTimeoutRecoveryTimer = Timer(AppConstants.postSoftTimeoutRecoveryWindow, () {
+      AppLogger.wallet('Soft timeout recovery window expired', data: {
+        'walletType': walletType.name,
+      });
+
+      // Cancel subscription
+      _softTimeoutRecoverySubscription?.cancel();
+      _softTimeoutRecoverySubscription = null;
+
+      // Check one last time if session was established
+      if (_walletService.connectedWallet != null) {
+        final wallet = _walletService.connectedWallet!;
+        AppLogger.wallet('Soft timeout recovery: Late session found', data: {
+          'address': wallet.address,
+        });
+
+        ref.read(connectionRecoveryProvider.notifier).reset();
+        state = AsyncValue.data(wallet);
+        unawaited(_saveSessionForPersistence(wallet));
+        return;
+      }
+
+      // No session found - show error with recovery options
+      ref.read(connectionRecoveryProvider.notifier).showRecovery(
+        walletType: walletType,
+      );
+
+      state = AsyncValue.error(
+        const WalletException(
+          message: '연결 시간이 초과되었습니다. 다시 시도해 주세요.',
+          code: 'TIMEOUT',
+        ),
+        StackTrace.current,
+      );
+
+      WalletLogService.instance.endConnection(success: false);
+    });
   }
 
   // ============================================================================
@@ -315,6 +438,22 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
 
     // Start session restoration tracking
     final restorationNotifier = ref.read(sessionRestorationProvider.notifier);
+    final currentPhase = ref.read(sessionRestorationProvider).phase;
+    
+    // Only start restoration if in initial state (first app launch)
+    // This prevents unnecessary skeleton UI when:
+    // - Returning from WalletConnect modal without successful connection
+    // - Restoration is already in progress
+    // - Restoration has already completed
+    if (currentPhase != SessionRestorationPhase.initial) {
+      AppLogger.wallet('Session restoration not in initial state, skipping', data: {
+        'currentPhase': currentPhase.name,
+      });
+      // Still initialize wallet service if needed
+      await _walletService.initialize();
+      return;
+    }
+    
     restorationNotifier.startChecking();
 
     // Check network connectivity before restoration
@@ -355,9 +494,9 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
     }
 
     // Mark restoration as complete only if not already marked (timeout/error)
-    final currentPhase = ref.read(sessionRestorationProvider).phase;
-    if (currentPhase == SessionRestorationPhase.restoring ||
-        currentPhase == SessionRestorationPhase.checking) {
+    final finalPhase = ref.read(sessionRestorationProvider).phase;
+    if (finalPhase == SessionRestorationPhase.restoring ||
+        finalPhase == SessionRestorationPhase.checking) {
       restorationNotifier.complete();
     }
 
@@ -997,6 +1136,38 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
 
       state = AsyncValue.data(wallet);
     } catch (e, st) {
+      // Check for SOFT_TIMEOUT (background timeout that may recover on resume)
+      final walletException = e is WalletException ? e : null;
+      if (walletException?.code == 'SOFT_TIMEOUT') {
+        AppLogger.wallet('Soft timeout detected - keeping recovery window open', data: {
+          'walletType': walletType.name,
+          'message': walletException?.message,
+        });
+
+        // Show "checking" UI instead of error
+        ref.read(connectionRecoveryProvider.notifier).showCheckingOnResume(
+          walletType: walletType,
+        );
+
+        // Keep loading state - adapter will handle recovery on resume
+        state = const AsyncValue.loading();
+
+        // [Sentry] Track as breadcrumb (not error - this is recoverable)
+        _sentry.addBreadcrumb(
+          message: 'Soft timeout - waiting for recovery',
+          category: 'wallet.connection',
+          data: {
+            'wallet_type': walletType.name,
+            'chain_id': chainId,
+          },
+          level: SentryLevel.info,
+        );
+
+        // Set up listener for session recovery
+        _setupSoftTimeoutRecoveryListener(walletType, chainId, cluster);
+        return; // Don't propagate as error
+      }
+
       // [Sentry] Track connection failure
       await _sentry.trackWalletConnectionFailure(
         walletType: walletType.name,
@@ -1515,6 +1686,30 @@ class MultiWalletNotifier extends Notifier<MultiWalletState> {
     }
   }
 
+  /// Cancel any pending/connecting wallet entries
+  /// 
+  /// Called when user dismisses connection modal without completing connection.
+  /// This cleans up temporary "connecting" entries from the state.
+  void cancelPendingConnections({WalletType? walletType}) {
+    // Find all connecting entries (optionally filtered by wallet type)
+    final connectingEntries = state.wallets.where((entry) {
+      final isConnecting = entry.status == WalletEntryStatus.connecting;
+      if (walletType != null) {
+        return isConnecting && entry.wallet.type == walletType;
+      }
+      return isConnecting;
+    }).toList();
+
+    // Remove each connecting entry
+    for (final entry in connectingEntries) {
+      state = state.removeWallet(entry.id);
+      AppLogger.wallet('Multi-wallet: Cancelled pending connection', data: {
+        'id': entry.id,
+        'walletType': entry.wallet.type.name,
+      });
+    }
+  }
+
   /// Set a wallet as the active wallet for operations
   Future<void> setActiveWallet(String walletId) async {
     final entry = state.getWallet(walletId);
@@ -1829,10 +2024,30 @@ class ConnectionRecoveryNotifier extends Notifier<ConnectionRecoveryState> {
 
   /// Hide recovery options and reset state
   void reset() {
-    if (state.showRecoveryOptions) {
+    if (state.showRecoveryOptions || state.isCheckingOnResume) {
       AppLogger.wallet('Recovery options reset');
     }
     state = ConnectionRecoveryState.empty;
+  }
+
+  /// Show "checking on resume" state for soft timeout recovery
+  void showCheckingOnResume({
+    required WalletType walletType,
+    String? connectionUri,
+  }) {
+    state = ConnectionRecoveryState.checkingAfterResume(
+      walletType: walletType,
+      connectionUri: connectionUri,
+    );
+
+    AppLogger.wallet('Soft timeout - showing checking state', data: {
+      'walletType': walletType.name,
+    });
+  }
+
+  /// Update checking message
+  void updateCheckingMessage(String message) {
+    state = state.copyWith(checkingMessage: message);
   }
 
   /// Update connection URI (e.g., when it becomes available)

@@ -1,6 +1,7 @@
-import 'dart:async' show Completer, StreamSubscription, unawaited;
+import 'dart:async' show unawaited;
 import 'dart:io';
 import 'dart:math' show min;
+import 'package:flutter/widgets.dart' show AppLifecycleState;
 import 'package:reown_appkit/reown_appkit.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wallet_integration_practice/core/core.dart';
@@ -44,8 +45,57 @@ class OkxWalletAdapter extends WalletConnectAdapter {
   /// Used for grace period during timeout to wait for deep link arrival
   bool _deepLinkPending = false;
 
+  /// Flag indicating we're in post-timeout recovery mode
+  /// When true, we should still try to recover session on resume
+  bool _pendingPostTimeoutRecovery = false;
+
   @override
   WalletType get walletType => WalletType.okxWallet;
+
+  /// Override lifecycle to handle post-error recovery for OKX
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+
+    // Additional OKX-specific handling: post-timeout recovery
+    if (state == AppLifecycleState.resumed && _pendingPostTimeoutRecovery) {
+      AppLogger.wallet('OKX: Post-timeout recovery on resume');
+      unawaited(_checkForPostErrorRecovery());
+    }
+  }
+
+  /// Check for session recovery after soft timeout
+  /// This runs when user returns from OKX after a soft timeout occurred
+  Future<void> _checkForPostErrorRecovery() async {
+    if (isConnected) {
+      AppLogger.wallet('OKX post-error: Already connected');
+      _pendingPostTimeoutRecovery = false;
+      return;
+    }
+
+    AppLogger.wallet('=== OKX Post-Error Recovery START ===');
+
+    // Wait for relay to reconnect (now in foreground)
+    final relayOk = await ensureRelayConnected(
+      timeout: const Duration(seconds: 8),
+    );
+    AppLogger.wallet('Post-error relay reconnection', data: {'success': relayOk});
+
+    // Small delay for session sync
+    await Future.delayed(const Duration(milliseconds: 500));
+
+    // Check for session
+    await optimisticSessionCheck();
+
+    if (isConnected && connectedAddress != null) {
+      AppLogger.wallet('=== OKX Post-Error Recovery SUCCESS ===');
+      _pendingPostTimeoutRecovery = false;
+      // Connection status will be emitted by optimisticSessionCheck
+    } else {
+      AppLogger.wallet('=== OKX Post-Error Recovery: No session ===');
+      // Keep _pendingPostTimeoutRecovery for next resume attempt (limited)
+    }
+  }
 
   @override
   Future<void> initialize() async {
@@ -218,6 +268,35 @@ class OkxWalletAdapter extends WalletConnectAdapter {
     }
   }
 
+  /// Check which OKX app variants are installed
+  ///
+  /// OKX has two separate apps:
+  /// - OKX Wallet (com.okx.wallet) -> okxwallet:// scheme
+  /// - OKX Exchange (com.okinc.okex) -> okx:// scheme
+  ///
+  /// Returns a record with installation status for each app.
+  /// This is used to prioritize the correct deep link scheme.
+  Future<({bool walletInstalled, bool exchangeInstalled})> _checkOkxAppsInstalled() async {
+    try {
+      final walletUri = Uri.parse('${WalletConstants.okxWalletDeepLink}test');
+      final exchangeUri = Uri.parse('okx://test');
+
+      final walletInstalled = await canLaunchUrl(walletUri);
+      final exchangeInstalled = await canLaunchUrl(exchangeUri);
+
+      AppLogger.wallet('OKX app installation check', data: {
+        'okxWalletInstalled': walletInstalled,
+        'okxExchangeInstalled': exchangeInstalled,
+        'platform': Platform.operatingSystem,
+      });
+
+      return (walletInstalled: walletInstalled, exchangeInstalled: exchangeInstalled);
+    } catch (e) {
+      AppLogger.e('Error checking OKX app installation', e);
+      return (walletInstalled: false, exchangeInstalled: false);
+    }
+  }
+
   /// Open OKX Wallet app
   Future<bool> openOkx() async {
     try {
@@ -231,24 +310,41 @@ class OkxWalletAdapter extends WalletConnectAdapter {
 
   /// Open OKX Wallet with WalletConnect URI
   ///
-  /// Uses an 8-strategy approach to maximize compatibility:
+  /// Uses intelligent platform-aware strategy selection:
   ///
-  /// Priority order (based on WalletConnect docs and OKX behavior):
-  /// 1. wc:// scheme (WalletConnect universal scheme - triggers OS wallet picker)
-  /// 2. okx://wc?uri= (Exchange app WC scheme)
-  /// 3. okxwallet://wc?uri= encoded (Standard WC format for wallet apps)
-  /// 4. okxwallet://wc?uri= non-encoded (Uri constructor)
-  /// 5. okx://wallet/dapp/wc?uri= (OKX DApp browser WC path)
-  /// 6. Universal Link with deeplink (double-encoded)
-  /// 7. Universal Link with uri (single-encoded)
-  /// 8. Raw wc: URI (direct WC URI)
+  /// **Android Priority Order** (wc: scheme works better on Android):
+  /// 0. Raw wc: URI (Android OS passes data directly to registered wallet)
+  /// 0b. wc:// universal scheme
+  /// Then fallback to OKX-specific schemes if wc: fails...
+  ///
+  /// **iOS Priority Order** (OKX-specific schemes first):
+  /// 1. okxwallet://wc?uri= encoded (Primary OKX Wallet scheme)
+  /// 2. okxwallet://wc?uri= non-encoded (Uri constructor variant)
+  /// 3. okx://wc?uri= (Exchange app WC scheme - if exchange installed)
+  /// 4. okx://wallet/dapp/wc?uri= (DApp browser path)
+  /// 5. Universal Link with deeplink (double-encoded)
+  /// 6. Universal Link with uri (single-encoded)
+  /// 7-8. wc:// and wc: schemes (LAST RESORT on iOS - may open wrong wallet)
   ///
   /// Note: OKX has two apps with different schemes:
-  /// - OKX Wallet (com.okx.wallet) → 'okxwallet://'
-  /// - OKX Exchange (com.okinc.okex) → 'okx://'
+  /// - OKX Wallet (com.okx.wallet) -> 'okxwallet://'
+  /// - OKX Exchange (com.okinc.okex) -> 'okx://'
+  ///
+  /// **Why wc: first on Android?**
+  /// OKX-specific schemes (okxwallet://wc?uri=...) fail to parse URI parameter
+  /// on Android, causing app to open without session proposal. The standard
+  /// wc: scheme allows Android OS to pass data directly to registered apps.
   Future<bool> openWithUri(String wcUri) async {
     AppLogger.wallet('=== OKX Wallet openWithUri() START ===');
     _logUriDetails(wcUri);
+
+    // Step 1: Check which OKX apps are installed
+    final (:walletInstalled, :exchangeInstalled) = await _checkOkxAppsInstalled();
+
+    // Early validation: warn if no OKX app detected
+    if (!walletInstalled && !exchangeInstalled) {
+      AppLogger.wallet('⚠️ WARNING: No OKX app detected, will try universal links');
+    }
 
     // Prepare encoded versions
     final encodedUri = Uri.encodeComponent(wcUri);
@@ -258,82 +354,121 @@ class OkxWalletAdapter extends WalletConnectAdapter {
       'originalLength': wcUri.length,
       'encodedLength': encodedUri.length,
       'doubleEncodedLength': doubleEncodedDeepLink.length,
+      'walletInstalled': walletInstalled,
+      'exchangeInstalled': exchangeInstalled,
     });
 
     // Track all attempts for diagnostic purposes
     final List<_DeepLinkResult> attempts = [];
 
-    // NEW PRIORITY ORDER (based on WalletConnect v2 docs and OKX behavior):
-    // 1. wc:// universal scheme (triggers OS wallet picker with WC support)
-    // 2. okx://wc?uri= (Exchange app WC scheme - may work for both apps)
-    // 3. okxwallet://wc?uri= encoded (Standard WC format)
-    // 4. okxwallet://wc?uri= non-encoded (Uri constructor)
-    // 5. OKX DApp browser WC path
-    // 6-8. Universal links and raw WC URI as fallbacks
+    // === ANDROID PRIORITY: Standard wc: scheme ===
+    // On Android, the standard wc: scheme works better than OKX-specific schemes
+    // because Android OS handles the data passing directly to registered apps.
+    // OKX-specific schemes (okxwallet://wc?uri=...) fail to parse URI parameter on Android.
+    if (Platform.isAndroid) {
+      AppLogger.wallet('🤖 Android detected: Trying standard wc: scheme FIRST');
 
-    // Strategy 1: wc:// universal scheme (WalletConnect universal handler)
-    // Per WalletConnect docs, wallets should register "wc://" to handle pairing
-    var result = await _tryStrategyWcUniversalScheme(wcUri);
+      // Strategy 0 (Android Priority): Raw wc: URI
+      // Android OS passes the entire URI data directly to the registered wallet app
+      var result = await _tryStrategy7RawWcUri(wcUri);
+      attempts.add(result);
+      if (result.launched) {
+        AppLogger.wallet('🎯 Strategy 0 (Android Priority): Raw wc: URI SUCCESS');
+        return true;
+      }
+
+      // Strategy 0b: wc:// universal scheme
+      result = await _tryStrategyWcUniversalScheme(wcUri);
+      attempts.add(result);
+      if (result.launched) {
+        AppLogger.wallet('🎯 Strategy 0b (Android): wc:// universal scheme SUCCESS');
+        return true;
+      }
+
+      AppLogger.wallet('⚠️ Android wc: strategies failed, falling back to OKX-specific schemes');
+    }
+
+    // === OKX Wallet specific strategies (PRIORITY for iOS) ===
+    // Try OKX Wallet schemes first if installed
+    if (walletInstalled) {
+      // Strategy 1: okxwallet://wc?uri= (Encoded) - PRIMARY
+      var result = await _tryStrategy2EncodedUri(encodedUri);
+      attempts.add(result);
+      if (result.launched) {
+        AppLogger.wallet('🎯 Strategy 1 SUCCESS: okxwallet://wc?uri= encoded');
+        return true;
+      }
+
+      // Strategy 2: okxwallet://wc?uri= (Non-encoded, Uri constructor)
+      result = await _tryStrategy1NonEncodedUri(wcUri);
+      attempts.add(result);
+      if (result.launched) {
+        AppLogger.wallet('🎯 Strategy 2 SUCCESS: okxwallet://wc?uri= non-encoded');
+        return true;
+      }
+    }
+
+    // === OKX Exchange app strategies ===
+    // Fallback to Exchange app if Wallet not installed
+    if (exchangeInstalled) {
+      // Strategy 3: okx://wc?uri= (Exchange app WC scheme)
+      var result = await _tryStrategy3ExchangeAppScheme(encodedUri);
+      attempts.add(result);
+      if (result.launched) {
+        AppLogger.wallet('🎯 Strategy 3 SUCCESS: okx://wc?uri=');
+        return true;
+      }
+
+      // Strategy 4: okx://wallet/dapp/wc?uri= (DApp browser path)
+      result = await _tryStrategy4DappBrowser(wcUri);
+      attempts.add(result);
+      if (result.launched) {
+        AppLogger.wallet('🎯 Strategy 4 SUCCESS: okx://wallet/dapp/wc');
+        return true;
+      }
+    }
+
+    // === Universal Link strategies ===
+    // Works even without app installed, may redirect to app store
+
+    // Strategy 5: Universal Link with deeplink (double-encoded)
+    var result = await _tryStrategy5UniversalLinkDeeplink(doubleEncodedDeepLink);
     attempts.add(result);
     if (result.launched) {
-      AppLogger.wallet('🎯 Using wc:// universal scheme');
+      AppLogger.wallet('🎯 Strategy 5 SUCCESS: Universal Link double-encoded');
       return true;
     }
 
-    // Strategy 2: okx://wc?uri= (Exchange app WC scheme)
-    result = await _tryStrategy3ExchangeAppScheme(encodedUri);
-    attempts.add(result);
-    if (result.launched) {
-      AppLogger.wallet('🎯 Using okx://wc?uri= scheme');
-      return true;
-    }
-
-    // Strategy 3: okxwallet://wc?uri= (Encoded)
-    result = await _tryStrategy2EncodedUri(encodedUri);
-    attempts.add(result);
-    if (result.launched) {
-      AppLogger.wallet('🎯 Using okxwallet://wc?uri= encoded scheme');
-      return true;
-    }
-
-    // Strategy 4: okxwallet://wc?uri= (Non-encoded, Uri constructor)
-    result = await _tryStrategy1NonEncodedUri(wcUri);
-    attempts.add(result);
-    if (result.launched) {
-      AppLogger.wallet('🎯 Using okxwallet://wc?uri= non-encoded scheme');
-      return true;
-    }
-
-    // Strategy 5: okx://wallet/dapp/wc?uri= (OKX DApp browser WC path)
-    result = await _tryStrategy4DappBrowser(wcUri);
-    attempts.add(result);
-    if (result.launched) {
-      AppLogger.wallet('🎯 Using OKX DApp browser WC path');
-      return true;
-    }
-
-    // Strategy 6: Universal Link with deeplink (double-encoded)
-    result = await _tryStrategy5UniversalLinkDeeplink(doubleEncodedDeepLink);
-    attempts.add(result);
-    if (result.launched) {
-      AppLogger.wallet('🎯 Using Universal Link with double-encoded deeplink');
-      return true;
-    }
-
-    // Strategy 7: Universal Link with uri (single-encoded)
+    // Strategy 6: Universal Link with uri (single-encoded)
     result = await _tryStrategy6UniversalLinkUri(encodedUri);
     attempts.add(result);
     if (result.launched) {
-      AppLogger.wallet('🎯 Using Universal Link with single-encoded uri');
+      AppLogger.wallet('🎯 Strategy 6 SUCCESS: Universal Link single-encoded');
       return true;
     }
 
-    // Strategy 8: Raw wc: URI (OS picker)
-    result = await _tryStrategy7RawWcUri(wcUri);
-    attempts.add(result);
-    if (result.launched) {
-      AppLogger.wallet('🎯 Using raw wc: URI with OS picker');
-      return true;
+    // === LAST RESORT strategies (iOS only) ===
+    // On Android, wc: schemes are tried FIRST (see above)
+    // On iOS, only try wc: schemes if no OKX-specific app was detected
+    // WARNING: wc:// scheme may open wrong wallet!
+    if (Platform.isIOS && !walletInstalled && !exchangeInstalled) {
+      AppLogger.wallet('⚠️ WARNING: iOS fallback - Trying wc:// scheme - may open wrong wallet');
+
+      // Strategy 7: wc:// universal scheme (RISKY)
+      result = await _tryStrategyWcUniversalScheme(wcUri);
+      attempts.add(result);
+      if (result.launched) {
+        AppLogger.wallet('🎯 Strategy 7 (iOS RISKY): wc:// universal scheme');
+        return true;
+      }
+
+      // Strategy 8: Raw wc: URI (OS picker)
+      result = await _tryStrategy7RawWcUri(wcUri);
+      attempts.add(result);
+      if (result.launched) {
+        AppLogger.wallet('🎯 Strategy 8 (iOS RISKY): Raw wc: URI');
+        return true;
+      }
     }
 
     // All strategies failed - log comprehensive diagnostic
@@ -342,7 +477,8 @@ class OkxWalletAdapter extends WalletConnectAdapter {
     throw WalletNotInstalledException(
       walletType: walletType.name,
       message: 'OKX Wallet is not installed or failed to process WC URI. '
-          'Tried ${attempts.length} strategies.',
+          'Tried ${attempts.length} strategies. '
+          'walletInstalled=$walletInstalled, exchangeInstalled=$exchangeInstalled',
     );
   }
 
@@ -761,28 +897,6 @@ class OkxWalletAdapter extends WalletConnectAdapter {
     }
   }
 
-  /// Wait for URI to be generated with polling
-  Future<String?> _waitForUri({
-    Duration timeout = const Duration(seconds: 5),
-    Duration pollInterval = const Duration(milliseconds: 200),
-  }) async {
-    final stopwatch = Stopwatch()..start();
-
-    while (stopwatch.elapsed < timeout) {
-      final uri = await getConnectionUri();
-      if (uri != null && uri.isNotEmpty) {
-        AppLogger.wallet('URI obtained', data: {
-          'waitTime': '${stopwatch.elapsedMilliseconds}ms',
-        });
-        return uri;
-      }
-      await Future.delayed(pollInterval);
-    }
-
-    AppLogger.w('URI generation timed out after ${timeout.inSeconds}s');
-    return null;
-  }
-
   /// Validate session - only accept OKX Wallet sessions
   /// This prevents cross-wallet session conflicts (e.g., Trust Wallet session being reused)
   ///
@@ -860,66 +974,18 @@ class OkxWalletAdapter extends WalletConnectAdapter {
       return wallet;
     }
 
-    // Set up connection tracking
-    final completer = Completer<WalletEntity>();
-    StreamSubscription? subscription;
-
-    // Subscribe to connection stream with enhanced error handling
-    // This protects against "Bad state: Cannot add event after closing" errors
-    subscription = connectionStream.listen(
-      (status) {
-        try {
-          AppLogger.wallet('Connection status update', data: {
-            'isConnected': status.isConnected,
-            'hasError': status.hasError,
-            'progressMessage': status.progressMessage,
-          });
-
-          if (status.isConnected && status.wallet != null) {
-            if (!completer.isCompleted) {
-              completer.complete(status.wallet!.copyWith(type: walletType));
-            }
-          } else if (status.hasError) {
-            if (!completer.isCompleted) {
-              completer.completeError(
-                WalletException(
-                  message: status.errorMessage ?? 'Connection failed',
-                  code: 'CONNECTION_ERROR',
-                ),
-              );
-            }
-          }
-        } catch (e, stackTrace) {
-          // Catch any errors during status processing (including stream errors)
-          AppLogger.e('Error processing connection status', e, stackTrace);
-          // Don't complete with error here - let the timeout handle it
-        }
-      },
-      onError: (error, stackTrace) {
-        AppLogger.e('Connection stream error', error, stackTrace);
-        // Only complete with error if this is a genuine stream error
-        // and not a "Bad state" from disposed controller
-        if (!completer.isCompleted && error is! StateError) {
-          completer.completeError(
-            WalletException(
-              message: 'Connection stream error: $error',
-              code: 'STREAM_ERROR',
-            ),
-          );
-        }
-      },
-      // Cancel on error to prevent further "Bad state" errors
-      cancelOnError: false,
-    );
-
     try {
-      // Start connection process in parent class (generates URI)
-      AppLogger.wallet('Starting WalletConnect connection...');
-      unawaited(super.connect(chainId: chainId, cluster: cluster));
+      // === CRITICAL FIX: Use prepareConnection() pattern (like MetaMask) ===
+      // This ensures the session proposal is fully published to the relay
+      // server BEFORE we open the wallet app.
+      //
+      // Previous issue: unawaited(super.connect()) didn't wait for relay
+      // acknowledgment, causing the wallet to query an empty relay.
+      AppLogger.wallet('Preparing connection (awaiting relay acknowledgment)...');
+      final sessionFuture = await prepareConnection(chainId: chainId);
 
-      // Wait for URI to be generated with polling
-      final uri = await _waitForUri();
-
+      // Get the generated URI (now guaranteed to be on relay)
+      final uri = await getConnectionUri();
       if (uri == null) {
         throw const WalletException(
           message: 'Failed to generate connection URI',
@@ -927,25 +993,37 @@ class OkxWalletAdapter extends WalletConnectAdapter {
         );
       }
 
+      // === CRITICAL FIX: Add relay propagation margin BEFORE opening wallet ===
+      // Even after prepareConnection() returns, there may be network latency
+      // before the proposal is fully queryable by the wallet app.
+      AppLogger.wallet('Waiting for relay propagation margin...');
+      await Future.delayed(AppConstants.okxRelayPropagationDelay);
+
       // Open OKX Wallet with the URI
       // Throws WalletNotInstalledException if app is not installed
+      AppLogger.wallet('Opening OKX Wallet...');
       await openWithUri(uri);
-
-      // IMPORTANT: Add delay for OKX's redirect behavior
-      // OKX may redirect back to our app before the WalletConnect
-      // session is fully established. This delay helps stabilize the connection.
-      AppLogger.wallet('Waiting for OKX redirect stabilization...');
-      await Future.delayed(const Duration(milliseconds: 500));
 
       // Wait for connection with extended timeout + recovery polling
       AppLogger.wallet('Waiting for wallet approval...');
       try {
-        final wallet = await completer.future.timeout(
+        final wallet = await sessionFuture.timeout(
           AppConstants.connectionTimeout,
           onTimeout: () async {
-            // OKX-specific timeout recovery:
-            // User may have approved in OKX but session not synced due to relay disconnection
-            AppLogger.wallet('Timeout reached, starting recovery sequence...');
+            // OXK-specific timeout recovery with soft timeout support:
+            // Distinguish between "hard timeout" (user didn't respond) and
+            // "soft timeout" (timeout occurred while app was in background)
+            AppLogger.wallet('Timeout reached, analyzing context...');
+
+            // Check accumulated background time
+            final bgTime = accumulatedBackgroundTime;
+            final wasInBackground = bgTime > AppConstants.softTimeoutThreshold;
+
+            AppLogger.wallet('Timeout analysis', data: {
+              'backgroundTime': bgTime.inSeconds,
+              'threshold': AppConstants.softTimeoutThreshold.inSeconds,
+              'isSoftTimeout': wasInBackground,
+            });
 
             // STEP 0: IMMEDIATE optimistic session check (no delay)
             // Check if session was already stored but we missed the event
@@ -989,8 +1067,24 @@ class OkxWalletAdapter extends WalletConnectAdapter {
               await Future.delayed(const Duration(milliseconds: 50));
             }
 
+            // ===== SOFT TIMEOUT HANDLING =====
+            // If we were in background for significant time, this is a SOFT TIMEOUT
+            // Don't give up yet - mark for recovery when user returns
+            if (wasInBackground) {
+              AppLogger.wallet('SOFT TIMEOUT: Background for ${bgTime.inSeconds}s');
+              markSoftTimeout();
+              _pendingPostTimeoutRecovery = true;
+
+              throw WalletException(
+                message: 'OKX 지갑에서 승인을 기다리고 있습니다.\n'
+                    '승인 후 이 앱으로 돌아와 주세요.',
+                code: 'SOFT_TIMEOUT',
+              );
+            }
+
+            // ===== HARD TIMEOUT HANDLING =====
             // Grace period expired, try aggressive session recovery
-            AppLogger.wallet('Grace period expired, attempting session recovery...');
+            AppLogger.wallet('Hard timeout, attempting session recovery...');
 
             // Try aggressive relay reconnection + session polling
             final recoveredWallet = await _attemptSessionRecovery();
@@ -1013,7 +1107,8 @@ class OkxWalletAdapter extends WalletConnectAdapter {
           'chainId': wallet.chainId,
         });
 
-        return wallet;
+        // Return wallet with correct type
+        return wallet.copyWith(type: walletType);
       } on WalletException catch (e) {
         // If timeout with recovery failed, keep waiting flag active for manual recovery
         // Don't clear _isWaitingForApproval yet - user might still be approving
@@ -1026,8 +1121,6 @@ class OkxWalletAdapter extends WalletConnectAdapter {
     } catch (e) {
       AppLogger.e('OKX Wallet connection failed', e);
       rethrow;
-    } finally {
-      await subscription.cancel();
     }
   }
 

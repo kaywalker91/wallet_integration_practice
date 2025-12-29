@@ -18,6 +18,36 @@ iLity Hub를 위한 지갑 연동 실습
 
 ## 최근 변경 사항
 
+### 2025-12-30: OKX 지갑 연결 안정성 대폭 개선
+
+**기능**: OKX 지갑 연결 시 발생하던 두 가지 주요 문제를 해결했습니다.
+
+**해결된 문제**:
+
+1.  **Phase 1: 승인 팝업 미표시 문제**
+    *   **증상**: OKX 지갑 앱이 열리지만 연결 승인 팝업이 표시되지 않음
+    *   **원인**: Android에서 `okxwallet://wc?uri={encodedUri}` 스키마가 URI 파라미터를 제대로 파싱하지 못함
+    *   **해결**: Android에서 표준 `wc:` 스키마를 최우선 사용하도록 `openWithUri()` 수정
+
+2.  **Phase 2: 승인 후 앱 복귀 시 크래시**
+    *   **증상**: OKX에서 승인 후 앱 복귀 시 `Bad state: Cannot add event after closing` 에러로 크래시
+    *   **원인**: OKX는 Phantom과 달리 딥링크 콜백에 세션 정보를 포함하지 않아 Relay 서버에서 세션을 받아와야 함. 이 과정에서 자동 재연결과 수동 재연결 로직이 동시에 실행되어 소켓 충돌 발생
+    *   **해결**:
+        *   `_safeReconnectRelay()`에 `_isReconnecting` 플래그 적용하여 중복 실행 방지
+        *   `didChangeAppLifecycleState()`에서 `if-if`를 `if-else if`로 변경하여 중복 호출 제거
+        *   `_restoreAndCheckSession()`에 15회 재시도 루프 추가 및 "Bad state" 에러 흡수
+
+**변경된 파일**:
+- `lib/wallet/adapters/walletconnect_adapter.dart`: Relay 재연결 로직 안정화
+- `lib/wallet/adapters/okx_wallet_adapter.dart`: Android 딥링크 스키마 최적화
+- `lib/presentation/screens/onboarding/onboarding_loading_page.dart`: 세션 복원 재시도 로직 강화
+- `lib/presentation/providers/wallet_provider.dart`: OKX 지갑 처리 개선
+- `lib/core/constants/wallet_constants.dart`: OKX 관련 상수 업데이트
+- `lib/core/constants/app_constants.dart`: 앱 상수 정리
+- `lib/presentation/pages/wallet_connect_modal.dart`: WalletConnect 모달 개선
+
+---
+
 ### 2025-12-29: 세션 복원 안정성 및 오프라인 모드 강화
 
 **기능**: 세션 복원 프로세스의 안정성을 대폭 강화하고, 오프라인 상태에서도 캐시된 지갑 정보를 표시하며, 상세한 메트릭 수집 및 보안 로깅을 도입했습니다.

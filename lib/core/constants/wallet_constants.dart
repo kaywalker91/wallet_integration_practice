@@ -26,6 +26,11 @@ class WalletConstants {
   static const String okxWalletPackageAndroid = 'com.okx.wallet';
   static const String okxWalletAppStoreId = '1323975469';
 
+  // OKX Exchange (separate app from OKX Wallet)
+  // Uses 'okx://' scheme, different from OKX Wallet's 'okxwallet://'
+  static const String okxExchangeDeepLink = 'okx://';
+  static const String okxExchangePackageAndroid = 'com.okinc.okex';
+
   // Rainbow
   static const String rainbowDeepLink = 'rainbow://';
   static const String rainbowPackageAndroid = 'me.rainbow';

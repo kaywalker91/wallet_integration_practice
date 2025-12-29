@@ -57,4 +57,22 @@ class AppConstants {
   static const Duration okxPrePollDelay = Duration(milliseconds: 1000);
   static const Duration okxSessionPollInterval = Duration(seconds: 1);
   static const int okxMaxSessionPolls = 5;
+
+  /// OKX Wallet용 relay 전파 마진 딜레이
+  /// prepareConnection() 반환 후에도 네트워크 지연을 고려한 버퍼
+  /// 지갑 앱이 relay에서 session proposal을 조회하기 전 충분한 전파 시간 확보
+  static const Duration okxRelayPropagationDelay = Duration(milliseconds: 300);
+
+  // Soft Timeout 설정
+  // - 백그라운드에서 발생한 타임아웃은 "soft timeout"으로 처리
+  // - 사용자가 앱으로 돌아오면 세션 복구 시도
+
+  /// Soft timeout 판정 기준 (백그라운드 시간이 이 이상이면 soft timeout)
+  static const Duration softTimeoutThreshold = Duration(seconds: 3);
+
+  /// 백그라운드로 인한 타임아웃 연장 최대값
+  static const Duration maxBackgroundTimeoutExtension = Duration(seconds: 60);
+
+  /// Soft timeout 후 복구 대기 시간
+  static const Duration postSoftTimeoutRecoveryWindow = Duration(seconds: 30);
 }

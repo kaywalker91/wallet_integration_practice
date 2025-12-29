@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -7,6 +6,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wallet_integration_practice/core/core.dart';
+import 'package:wallet_integration_practice/domain/entities/connected_wallet_entry.dart';
+import 'package:wallet_integration_practice/domain/entities/multi_wallet_state.dart';
 import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
 import 'package:wallet_integration_practice/presentation/providers/wallet_provider.dart';
 import 'package:wallet_integration_practice/presentation/providers/chain_provider.dart';
@@ -48,16 +49,10 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
     with SingleTickerProviderStateMixin {
   OnboardingStep _currentStep = OnboardingStep.openingWallet;
   String? _errorMessage;
-  StreamSubscription? _connectionSubscription;
   late AnimationController _pulseController;
-
-  /// Counter for temporary errors - allows recovery attempts before showing error UI
-  /// This prevents the "연결 실패" message from appearing during temporary disconnections
-  int _temporaryErrorCount = 0;
-  static const int _maxTemporaryErrors = 3;
-
-  /// Timer for delayed error handling - gives connection time to recover
-  Timer? _errorDelayTimer;
+  ProviderSubscription<MultiWalletState>? _walletStateSubscription;
+  DateTime? _connectionStartedAt;
+  bool _hasHandledSuccess = false;
 
   @override
   void initState() {
@@ -69,18 +64,17 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
 
     // Defer provider operations until after the widget tree is built
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _startWalletStateListener();
+
       if (widget.isRestoring) {
         // Restoring from pending state - initialize adapter and check for existing session
         AppLogger.i('[Onboarding] Restoring from pending state...');
         setState(() => _currentStep = OnboardingStep.waitingApproval);
         _restoreAndCheckSession();
       } else {
-        // Normal flow - listen first, then initiate connection
-        _listenToConnectionStatus();
-
         // Add delay to ensure UI is fully rendered before wallet app opens
         Future.delayed(const Duration(milliseconds: 300), () {
-          if (mounted) {
+          if (mounted && !_isWalletTypeConnected()) {
             _initiateConnection();
           }
         });
@@ -90,101 +84,95 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
 
   @override
   void dispose() {
-    _connectionSubscription?.cancel();
-    _errorDelayTimer?.cancel();
+    _walletStateSubscription?.close();
     _pulseController.dispose();
     super.dispose();
   }
 
-  bool _listenToConnectionStatus() {
-    final walletService = ref.read(walletServiceProvider);
+  void _startWalletStateListener() {
+    if (_walletStateSubscription != null) return;
 
-    // IMPORTANT: Check current connection status FIRST before subscribing to stream.
-    // This handles the case where:
-    // 1. User approved connection in wallet app
-    // 2. WalletConnect received session while app was in background
-    // 3. App returned to foreground, but stream event was already emitted
-    //
-    // Without this check, the UI would wait forever for a stream event that won't come.
-    final currentStatus = walletService.currentConnectionStatus;
-    AppLogger.d('[Onboarding] Checking current status: ${currentStatus.state}');
+    _walletStateSubscription = ref.listenManual<MultiWalletState>(
+      multiWalletNotifierProvider,
+      (_, next) => _syncFromWalletState(next),
+      fireImmediately: true,
+    );
+  }
 
-    if (currentStatus.isConnected && currentStatus.wallet != null) {
-      AppLogger.i('[Onboarding] Already connected! Proceeding to completion.');
-      
-      // If restoring, give user a moment to see the "verifying/restoring" state
-      // before completing, otherwise it feels like a glitch.
-      if (widget.isRestoring) {
-        Future.delayed(const Duration(milliseconds: 1500), () {
-          if (mounted) _handleConnectionSuccess(currentStatus.wallet!);
-        });
-      } else {
-        _handleConnectionSuccess(currentStatus.wallet!);
-      }
-      return true; // Don't subscribe to stream - already connected
-    }
+  void _syncFromWalletState(MultiWalletState state) {
+    if (!mounted || _hasHandledSuccess) return;
 
-    // Subscribe to stream for future status updates
-    _connectionSubscription = walletService.connectionStream.listen(
-      (status) {
-        AppLogger.d('[Onboarding] Connection status: ${status.state}');
+    final entry = _selectRelevantEntry(state);
+    if (entry == null) return;
 
-        if (status.isConnected && status.wallet != null) {
-          _handleConnectionSuccess(status.wallet!);
-        } else if (status.hasError) {
-          // CRITICAL: Don't immediately show error - allow recovery attempts
-          // WalletConnect may emit temporary errors during relay reconnection
-          _temporaryErrorCount++;
-
-          AppLogger.w('[Onboarding] Temporary error #$_temporaryErrorCount: ${status.errorMessage}');
-
-          // Check if this is a fatal error that should be shown immediately
-          final isFatalError = _isFatalConnectionError(status.errorMessage);
-
-          if (isFatalError || _temporaryErrorCount >= _maxTemporaryErrors) {
-            // Fatal error or too many temporary errors - show error UI
-            _errorDelayTimer?.cancel();
-            ref.read(pendingConnectionServiceProvider).clearPendingConnection();
-
-            setState(() {
-              _currentStep = OnboardingStep.error;
-              _errorMessage = status.errorMessage ?? '연결에 실패했습니다.';
-            });
-          } else {
-            // Temporary error - schedule delayed error check
-            // If connection succeeds within this delay, the timer will be cancelled
-            _errorDelayTimer?.cancel();
-            _errorDelayTimer = Timer(const Duration(seconds: 3), () {
-              // After delay, check if still not connected
-              final currentStatus = ref.read(walletServiceProvider).currentConnectionStatus;
-              if (!currentStatus.isConnected && mounted) {
-                ref.read(pendingConnectionServiceProvider).clearPendingConnection();
-                setState(() {
-                  _currentStep = OnboardingStep.error;
-                  _errorMessage = status.errorMessage ?? '연결에 실패했습니다.';
-                });
-              }
-            });
-          }
+    switch (entry.status) {
+      case WalletEntryStatus.connected:
+        if (widget.isRestoring) {
+          Future.delayed(const Duration(milliseconds: 1500), () {
+            if (mounted && !_hasHandledSuccess) {
+              _handleConnectionSuccess(entry.wallet);
+            }
+          });
+        } else {
+          _handleConnectionSuccess(entry.wallet);
         }
-      },
-      onError: (error) {
-        AppLogger.e('[Onboarding] Stream error', error);
+        break;
+      case WalletEntryStatus.connecting:
+        if (_currentStep == OnboardingStep.openingWallet) {
+          setState(() => _currentStep = OnboardingStep.waitingApproval);
+        }
+        break;
+      case WalletEntryStatus.error:
+        ref.read(pendingConnectionServiceProvider).clearPendingConnection();
         setState(() {
           _currentStep = OnboardingStep.error;
-          _errorMessage = error.toString();
+          _errorMessage = entry.errorMessage ?? '연결에 실패했습니다.';
         });
-      },
-    );
-    
-    return false;
+        break;
+      case WalletEntryStatus.disconnected:
+        break;
+    }
+  }
+
+  ConnectedWalletEntry? _selectRelevantEntry(MultiWalletState state) {
+    final entries = state.wallets
+        .where((entry) => entry.wallet.type == widget.walletType)
+        .toList();
+
+    if (entries.isEmpty) return null;
+
+    final connectedEntries = entries
+        .where((entry) => entry.status == WalletEntryStatus.connected)
+        .toList();
+    if (connectedEntries.isNotEmpty) {
+      connectedEntries
+          .sort((a, b) => b.lastActivityAt.compareTo(a.lastActivityAt));
+      return connectedEntries.first;
+    }
+
+    if (_connectionStartedAt == null) return null;
+
+    final recentEntries = entries
+        .where((entry) => !entry.lastActivityAt.isBefore(_connectionStartedAt!))
+        .toList();
+    if (recentEntries.isEmpty) return null;
+
+    recentEntries
+        .sort((a, b) => b.lastActivityAt.compareTo(a.lastActivityAt));
+    return recentEntries.first;
+  }
+
+  bool _isWalletTypeConnected() {
+    final state = ref.read(multiWalletNotifierProvider);
+    return state.wallets.any((entry) =>
+        entry.wallet.type == widget.walletType &&
+        entry.status == WalletEntryStatus.connected);
   }
 
   /// Handle successful wallet connection
   Future<void> _handleConnectionSuccess(WalletEntity wallet) async {
-    // Cancel any pending error timer - connection succeeded!
-    _errorDelayTimer?.cancel();
-    _temporaryErrorCount = 0;
+    if (_hasHandledSuccess) return;
+    _hasHandledSuccess = true;
 
     // Clear pending state
     await ref.read(pendingConnectionServiceProvider).clearPendingConnection();
@@ -234,126 +222,127 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
   /// 1. Re-initialize the wallet adapter (which restores session from storage)
   /// 2. Ensure relay WebSocket is connected (CRITICAL after cold start!)
   /// 3. Check if the stored session is valid and usable
-  /// 4. If connected, proceed to home; otherwise, show error
+  /// 4. If connected, proceed to home; otherwise, retry up to maxRetries times
+  ///
+  /// Key improvement: Uses a retry loop with "Bad state" error absorption
+  /// to handle socket race conditions during OKX wallet reconnection.
   Future<void> _restoreAndCheckSession() async {
     AppLogger.i('[Onboarding] Restoring session for ${widget.walletType.name}...');
+    _connectionStartedAt = DateTime.now();
 
-    try {
-      // First, listen to connection status stream for future events
-      final alreadyConnected = _listenToConnectionStatus();
+    // Maximum retry attempts (about 15 seconds total)
+    const maxRetries = 15;
 
-      // If already connected (unlikely but possible), we're done
-      if (alreadyConnected) {
-        AppLogger.i('[Onboarding] Session already found during listen setup');
-        final currentWallet = ref.read(walletServiceProvider).currentConnectionStatus.wallet;
-        if (currentWallet != null) {
-          ref.read(multiWalletNotifierProvider.notifier).registerWallet(currentWallet);
+    for (int attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        // Check if already connected via MultiWallet state
+        final existingEntry =
+            _selectRelevantEntry(ref.read(multiWalletNotifierProvider));
+        if (existingEntry != null &&
+            existingEntry.status == WalletEntryStatus.connected) {
+          AppLogger.i('[Onboarding] Wallet already connected via MultiWallet');
+          await _handleConnectionSuccess(existingEntry.wallet);
+          return;
         }
-        return;
-      }
 
-      // Update UI to show we're restoring
-      if (mounted) {
-        setState(() => _currentStep = OnboardingStep.verifying);
-      }
+        // Update UI to show we're restoring (only on first attempt)
+        if (mounted && _currentStep != OnboardingStep.verifying) {
+          setState(() => _currentStep = OnboardingStep.verifying);
+        }
 
-      // Get the wallet service
-      final walletService = ref.read(walletServiceProvider);
+        // Get the wallet service
+        final walletService = ref.read(walletServiceProvider);
 
-      // Initialize adapter WITHOUT creating a new connection
-      // This restores the session from storage and attempts relay reconnection
-      AppLogger.i('[Onboarding] Initializing adapter for restoration...');
-      final adapter = await walletService.initializeAdapter(widget.walletType);
+        // Initialize adapter WITHOUT creating a new connection
+        // This restores the session from storage and attempts relay reconnection
+        if (attempt == 0) {
+          AppLogger.i('[Onboarding] Initializing adapter for restoration...');
+        }
+        final adapter = await walletService.initializeAdapter(widget.walletType);
 
-      // CRITICAL: For WalletConnect adapters, verify relay is connected
-      // After cold start (Android process death), the WebSocket is dead
-      // even though session objects are restored from storage
-      if (adapter is WalletConnectAdapter) {
-        AppLogger.i('[Onboarding] Checking relay connection...');
-        final relayConnected = await adapter.ensureRelayConnected(
-          timeout: const Duration(seconds: 8),
-        );
+        // CRITICAL: For WalletConnect adapters, verify relay is connected
+        // After cold start (Android process death), the WebSocket is dead
+        // even though session objects are restored from storage
+        if (adapter is WalletConnectAdapter) {
+          if (attempt == 0) {
+            AppLogger.i('[Onboarding] Checking relay connection...');
+          } else {
+            AppLogger.i('[Onboarding] Attempt ${attempt + 1}/$maxRetries: Checking relay...');
+          }
 
-        if (!relayConnected) {
-          AppLogger.w('[Onboarding] Relay reconnection failed');
+          // ensureRelayConnected now handles "Bad state" errors internally
+          await adapter.ensureRelayConnected(
+            timeout: const Duration(seconds: 5),
+          );
 
-          // Clear pending state since we can't restore
+          // Wait for session to propagate after relay reconnection
+          await Future.delayed(const Duration(milliseconds: 500));
+        }
+
+        // Check if we're now connected after relay reconnection
+        final status = walletService.currentConnectionStatus;
+        if (status.isConnected &&
+            status.wallet != null &&
+            status.wallet!.type == widget.walletType) {
+          AppLogger.i('[Onboarding] Session restored successfully on attempt ${attempt + 1}!');
+
+          // Clear pending state
           await ref.read(pendingConnectionServiceProvider).clearPendingConnection();
 
+          // Register wallet
+          ref.read(multiWalletNotifierProvider.notifier).registerWallet(status.wallet!);
+
+          // Update chain selection for balance display
+          final defaultChainId = widget.walletType.defaultChainId;
+          final chain = SupportedChains.getByChainId(defaultChainId);
+          if (chain != null) {
+            ref.read(chainSelectionProvider.notifier).selectChain(chain);
+          }
+
+          // Show success briefly then navigate
           if (mounted) {
-            setState(() {
-              _currentStep = OnboardingStep.error;
-              _errorMessage = '세션이 만료되었습니다. 지갑을 다시 연결해 주세요.';
-            });
+            setState(() => _currentStep = OnboardingStep.complete);
+            await Future.delayed(const Duration(milliseconds: 800));
+            _navigateToHome();
           }
           return;
         }
 
-        AppLogger.i('[Onboarding] Relay connected, waiting for session sync...');
-
-        // CRITICAL: Add delay to allow session to propagate after relay reconnection
-        // The relay may have reconnected but the session data may not have synced yet
-        // This is especially important for Trust Wallet which has slower session propagation
-        await Future.delayed(const Duration(milliseconds: 500));
-
-        AppLogger.i('[Onboarding] Checking session...');
-      }
-
-      // Check if we're now connected after relay reconnection
-      final status = walletService.currentConnectionStatus;
-      if (status.isConnected && status.wallet != null) {
-        AppLogger.i('[Onboarding] Session restored successfully!');
-
-        // Clear pending state
-        await ref.read(pendingConnectionServiceProvider).clearPendingConnection();
-
-        // Register wallet
-        ref.read(multiWalletNotifierProvider.notifier).registerWallet(status.wallet!);
-
-        // Update chain selection for balance display
-        final defaultChainId = widget.walletType.defaultChainId;
-        final chain = SupportedChains.getByChainId(defaultChainId);
-        if (chain != null) {
-          ref.read(chainSelectionProvider.notifier).selectChain(chain);
+        // Session not found yet - wait before retry
+        if (attempt < maxRetries - 1) {
+          AppLogger.i('[Onboarding] No session yet, retrying in 1s... (${attempt + 1}/$maxRetries)');
+          await Future.delayed(const Duration(seconds: 1));
         }
 
-        // Show success briefly then navigate
-        if (mounted) {
-          setState(() => _currentStep = OnboardingStep.complete);
-          await Future.delayed(const Duration(milliseconds: 800));
-          _navigateToHome();
+      } catch (e) {
+        // === CRITICAL: Absorb "Bad state" errors and continue retrying ===
+        // These errors occur during socket handoff and are transient
+        if (e.toString().contains('Bad state') || e.toString().contains('closed')) {
+          AppLogger.w('[Onboarding] Socket error ignored, retrying... ($e)');
+          if (attempt < maxRetries - 1) {
+            await Future.delayed(const Duration(seconds: 1));
+            continue;
+          }
+        } else {
+          // Other errors - log but continue retrying unless it's the last attempt
+          AppLogger.w('[Onboarding] Error on attempt ${attempt + 1}: $e');
+          if (attempt < maxRetries - 1) {
+            await Future.delayed(const Duration(seconds: 1));
+            continue;
+          }
         }
-        return;
       }
+    }
 
-      // Session not found after relay reconnection
-      // DON'T show error immediately! WalletConnect retry logic may still succeed.
-      // Trust Wallet especially has slow session propagation.
-      // Just log warning and keep waiting - the stream listener will handle eventual connection or timeout.
-      AppLogger.w('[Onboarding] No valid session found yet after relay reconnection, waiting for retry...');
+    // All retries exhausted - show error
+    AppLogger.w('[Onboarding] All $maxRetries attempts failed');
+    await ref.read(pendingConnectionServiceProvider).clearPendingConnection();
 
-      // Keep the UI in "verifying/waiting" state instead of showing error
-      // The connection stream listener will eventually:
-      // 1. Receive successful connection → navigate to home
-      // 2. Receive fatal error after all retries → show error
-      // 3. Timeout after max retries → show error
-      //
-      // Note: We do NOT call clearPendingConnection() here because
-      // the retry logic is still active and may succeed.
-      if (mounted && _currentStep == OnboardingStep.verifying) {
-        // Stay in verifying state - don't change to error
-        AppLogger.i('[Onboarding] Keeping verifying state, retry logic active');
-      }
-    } catch (e) {
-      AppLogger.e('[Onboarding] Session restore error', e);
-      await ref.read(pendingConnectionServiceProvider).clearPendingConnection();
-
-      if (mounted) {
-        setState(() {
-          _currentStep = OnboardingStep.error;
-          _errorMessage = '세션 복원 실패: ${e.toString()}';
-        });
-      }
+    if (mounted) {
+      setState(() {
+        _currentStep = OnboardingStep.error;
+        _errorMessage = '세션을 복원할 수 없습니다. 다시 연결해 주세요.';
+      });
     }
   }
 
@@ -365,6 +354,7 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
     }
 
     setState(() => _currentStep = OnboardingStep.openingWallet);
+    _connectionStartedAt = DateTime.now();
 
     // Save pending connection state for app restoration after cold start
     final pendingService = ref.read(pendingConnectionServiceProvider);
@@ -764,9 +754,12 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
   Widget _buildRecoveryOptions(ThemeData theme) {
     final showRecovery = ref.watch(showRecoveryOptionsProvider);
     final connectionUri = ref.watch(recoveryConnectionUriProvider);
+    final recoveryWalletType = ref.watch(recoveryWalletTypeProvider);
 
     // Only show during waiting approval step
-    if (!showRecovery || _currentStep != OnboardingStep.waitingApproval) {
+    if (!showRecovery ||
+        _currentStep != OnboardingStep.waitingApproval ||
+        recoveryWalletType != widget.walletType) {
       return const SizedBox.shrink();
     }
 
@@ -919,41 +912,19 @@ class _OnboardingLoadingPageState extends ConsumerState<OnboardingLoadingPage>
     // Reset recovery state
     ref.read(connectionRecoveryProvider.notifier).reset();
 
-    // Cancel current subscription
-    _connectionSubscription?.cancel();
-    _errorDelayTimer?.cancel();
-    _temporaryErrorCount = 0;
-
     // Reset step and restart
-    setState(() => _currentStep = OnboardingStep.openingWallet);
+    setState(() {
+      _currentStep = OnboardingStep.openingWallet;
+      _errorMessage = null;
+    });
+    _connectionStartedAt = DateTime.now();
 
     // Re-initiate connection
-    _listenToConnectionStatus();
     Future.delayed(const Duration(milliseconds: 300), () {
       if (mounted) {
         _initiateConnection();
       }
     });
-  }
-
-  /// Check if the error is fatal and should immediately show error UI
-  /// Temporary/recoverable errors should allow time for reconnection
-  bool _isFatalConnectionError(String? errorMessage) {
-    if (errorMessage == null) return false;
-
-    final fatalPatterns = [
-      '설치되어 있지 않습니다', // Wallet not installed
-      'not installed',
-      'User rejected', // User explicitly rejected
-      'rejected the request',
-      '취소', // User cancelled
-      'cancelled',
-      'denied',
-    ];
-
-    final lowerMessage = errorMessage.toLowerCase();
-    return fatalPatterns
-        .any((pattern) => lowerMessage.contains(pattern.toLowerCase()));
   }
 
   Color _getWalletColor(WalletType type) {

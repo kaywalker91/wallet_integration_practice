@@ -25,10 +25,18 @@ class _WalletConnectModalState extends ConsumerState<WalletConnectModal> {
   String? _uri;
   Timer? _poller;
   String? _errorMessage;
+  bool _connectionSucceeded = false;
+  
+  // Safe reference to notifier for dispose logic
+  // Storing this avoids "Bad state: Using ref when a widget is unmounted" error
+  late final MultiWalletNotifier _walletNotifier;
 
   @override
   void initState() {
     super.initState();
+    // Save reference safely in initState where ref is guaranteed to be valid
+    _walletNotifier = ref.read(multiWalletNotifierProvider.notifier);
+    
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initialize();
     });
@@ -37,6 +45,18 @@ class _WalletConnectModalState extends ConsumerState<WalletConnectModal> {
   @override
   void dispose() {
     _poller?.cancel();
+    
+    // Only cancel pending connections if connection did NOT succeed
+    // This prevents cleaning up a successfully connected wallet
+    // Use Future to delay modification until after widget tree is done building
+    if (!_connectionSucceeded) {
+      final walletType = widget.walletType;
+      final notifier = _walletNotifier;
+      Future(() {
+        notifier.cancelPendingConnections(walletType: walletType);
+      });
+    }
+    
     super.dispose();
   }
 
@@ -102,6 +122,9 @@ class _WalletConnectModalState extends ConsumerState<WalletConnectModal> {
   }
   
   void _handleSuccess() {
+      // Mark connection as successful to prevent dispose from cancelling it
+      _connectionSucceeded = true;
+      
       // Navigate to Home or close
       // Since this is likely pushed on top of Home, we can pop or pushReplacement Home
       if (mounted) {
@@ -128,6 +151,7 @@ class _WalletConnectModalState extends ConsumerState<WalletConnectModal> {
         child: Padding(
           padding: const EdgeInsets.all(24.0),
           child: Column(
+            crossAxisAlignment: CrossAxisAlignment.center,
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               if (_errorMessage != null)
@@ -144,15 +168,20 @@ class _WalletConnectModalState extends ConsumerState<WalletConnectModal> {
   }
 
   Widget _buildLoadingView(ThemeData theme) {
-    return Column(
-      children: [
-        const CircularProgressIndicator(),
-        const SizedBox(height: 24),
-        Text(
-          'Integrating with WalletConnect...',
-          style: theme.textTheme.titleMedium,
-        ),
-      ],
+    return SizedBox(
+      width: double.infinity,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          const CircularProgressIndicator(),
+          const SizedBox(height: 24),
+          Text(
+            'Integrating with WalletConnect...',
+            style: theme.textTheme.titleMedium,
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
     );
   }
 

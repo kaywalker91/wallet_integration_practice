@@ -75,11 +75,83 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
   /// Limits battery/resource usage while app is in background
   static const int _maxBackgroundReconnectAttempts = 3;
 
+  // ===== Background Time Tracking for Soft Timeout =====
+
+  /// Track when app went to background (for timeout adjustment)
+  DateTime? _backgroundEntryTime;
+
+  /// Total time spent in background during current connection attempt
+  Duration _accumulatedBackgroundTime = Duration.zero;
+
+  /// Flag indicating a "soft timeout" occurred while in background
+  /// When true, session recovery should be attempted on resume
+  bool _softTimeoutOccurred = false;
+
   /// Reset approval waiting state and background reconnection counter
   /// Call this when approval completes, is cancelled, or connection succeeds/fails
   void _resetApprovalState() {
     _isWaitingForApproval = false;
     _backgroundReconnectAttempts = 0;
+    resetBackgroundTracking();
+  }
+
+  // ===== Background Tracking Methods (for Soft Timeout) =====
+
+  /// Accumulated background time during current connection attempt
+  /// Subclasses can use this to determine if a soft timeout should be triggered
+  @protected
+  Duration get accumulatedBackgroundTime => _accumulatedBackgroundTime;
+
+  /// Mark that a soft timeout occurred (timeout while in background)
+  /// Called by subclasses when they detect this scenario
+  @protected
+  void markSoftTimeout() {
+    _softTimeoutOccurred = true;
+    AppLogger.wallet('Soft timeout marked for recovery on resume');
+  }
+
+  /// Check if soft timeout flag is set
+  @protected
+  bool get hasSoftTimeout => _softTimeoutOccurred;
+
+  /// Reset all background tracking state
+  /// Call after connection succeeds/fails or when starting new connection
+  @protected
+  void resetBackgroundTracking() {
+    _backgroundEntryTime = null;
+    _accumulatedBackgroundTime = Duration.zero;
+    _softTimeoutOccurred = false;
+  }
+
+  /// Attempt session recovery after a soft timeout occurred while in background
+  /// This gives the user a second chance to connect if they approved in the wallet
+  Future<void> _attemptPostTimeoutRecovery() async {
+    AppLogger.wallet('=== Post-Timeout Recovery START ===');
+    _softTimeoutOccurred = false;
+
+    // Now in foreground - try to reconnect relay with reasonable timeout
+    final relayOk = await ensureRelayConnected(
+      timeout: const Duration(seconds: 5),
+    );
+    AppLogger.wallet('Post-timeout relay reconnection', data: {
+      'success': relayOk,
+    });
+
+    // Small delay for session sync after relay reconnection
+    if (relayOk) {
+      await Future.delayed(const Duration(milliseconds: 500));
+    }
+
+    // Check for session regardless of relay state (might be cached)
+    await optimisticSessionCheck();
+
+    if (isConnected) {
+      AppLogger.wallet('=== Post-Timeout Recovery SUCCESS ===');
+      _emitConnectionStatus();
+      _resetApprovalState();
+    } else {
+      AppLogger.wallet('=== Post-Timeout Recovery: No session found ===');
+    }
   }
 
   /// Optimistic session check - proactively check for established sessions
@@ -266,7 +338,37 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
       'hasSession': _session != null,
     });
 
+    // ===== Background Time Tracking =====
+    // Track when app enters background while waiting for approval
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive) {
+      if (_isWaitingForApproval && _backgroundEntryTime == null) {
+        _backgroundEntryTime = DateTime.now();
+        AppLogger.wallet('Entered background while waiting for approval', data: {
+          'entryTime': _backgroundEntryTime!.toIso8601String(),
+        });
+      }
+    }
+
     if (state == AppLifecycleState.resumed) {
+      // ===== Calculate Background Duration =====
+      if (_backgroundEntryTime != null) {
+        final bgDuration = DateTime.now().difference(_backgroundEntryTime!);
+        _accumulatedBackgroundTime += bgDuration;
+        _backgroundEntryTime = null;
+        AppLogger.wallet('Resumed from background', data: {
+          'backgroundDuration': bgDuration.inSeconds,
+          'totalBackgroundTime': _accumulatedBackgroundTime.inSeconds,
+        });
+      }
+
+      // ===== Soft Timeout Recovery =====
+      // Check if a soft timeout occurred while in background
+      if (_softTimeoutOccurred) {
+        AppLogger.wallet('Soft timeout recovery triggered on resume');
+        unawaited(_attemptPostTimeoutRecovery());
+      }
+
       // CRITICAL: Optimistic session check FIRST (unconditionally)
       // This handles the case where timeout occurred before resume,
       // but the wallet session was actually established.
@@ -280,19 +382,20 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
       // Force relay state refresh to detect zombie connections
       _refreshRelayState();
 
-      // If relay disconnected and we're in any pending state, try reconnect
-      if (!_isRelayConnected && _appKit != null) {
-        AppLogger.wallet('Relay disconnected on resume, forcing reconnect...');
-        // Fire-and-forget reconnection - don't block lifecycle
-        unawaited(_appKit!.core.relayClient.connect());
-      }
-
-      // Existing logic for waiting approval (kept for backward compatibility)
-      // This provides additional session checking via relay events
+      // === CRITICAL: Prevent duplicate reconnection attempts ===
+      // Only ONE of these paths should execute to avoid race conditions:
+      // 1. If waiting for approval → use _ensureRelayAndCheckSession (includes reconnect)
+      // 2. Otherwise → use _safeReconnectRelay (simple reconnect)
       if (_isWaitingForApproval) {
         // App returned to foreground while waiting for wallet approval
         // CRITICAL: Ensure relay is connected before checking session
+        // This method handles relay reconnection internally
         _ensureRelayAndCheckSession();
+      } else if (!_isRelayConnected && _appKit != null) {
+        AppLogger.wallet('Relay disconnected on resume, forcing reconnect...');
+        // Fire-and-forget reconnection with safe disconnect first
+        // Only executed when NOT waiting for approval (to avoid duplicate)
+        unawaited(_safeReconnectRelay());
       }
     }
   }
@@ -668,6 +771,65 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
     return actualState;
   }
 
+  /// Safe relay reconnection with explicit disconnect first
+  ///
+  /// This prevents "Bad state: Cannot add event after closing" errors
+  /// by ensuring the old WebSocket stream is fully cleaned up before
+  /// attempting a new connection.
+  ///
+  /// Uses `_isReconnecting` flag to prevent multiple simultaneous
+  /// reconnection attempts which can cause race conditions.
+  Future<void> _safeReconnectRelay() async {
+    if (_appKit == null) return;
+
+    // Prevent duplicate reconnection attempts
+    if (_isReconnecting) {
+      AppLogger.wallet('Safe reconnect skipped: already reconnecting');
+      return;
+    }
+    _isReconnecting = true;
+
+    try {
+      // Step 1: Explicitly disconnect to clean up zombie socket state
+      try {
+        await _appKit!.core.relayClient.disconnect();
+      } catch (e) {
+        // Ignore disconnect errors - socket may already be closed
+        AppLogger.wallet('Relay disconnect during cleanup (ignorable)', data: {
+          'error': e.toString(),
+        });
+      }
+
+      // Step 2: Short delay to allow stream cleanup (increased for stability)
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      // Step 3: Attempt reconnection
+      await _appKit!.core.relayClient.connect();
+
+      AppLogger.wallet('Safe relay reconnection completed');
+    } catch (e) {
+      // Absorb "Bad state" errors - these indicate stream cleanup issues
+      // but don't prevent subsequent operations
+      if (e.toString().contains('Bad state') || e.toString().contains('closed')) {
+        AppLogger.wallet('Relay reconnection stream conflict (absorbed)', data: {
+          'error': e.toString(),
+        });
+        // Check if actually connected despite the error
+        await Future.delayed(const Duration(milliseconds: 200));
+        if (_appKit!.core.relayClient.isConnected) {
+          _isRelayConnected = true;
+          AppLogger.wallet('Despite error, relay is actually connected');
+        }
+      } else {
+        AppLogger.wallet('Relay reconnection failed', data: {
+          'error': e.toString(),
+        });
+      }
+    } finally {
+      _isReconnecting = false;
+    }
+  }
+
   /// Ensure relay is connected, attempting reconnection if needed.
   ///
   /// Returns true if relay is connected, false if reconnection failed.
@@ -690,10 +852,17 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
       return false;
     }
 
-    // Already connected
+    // Already connected - verify actual state
     if (_isRelayConnected) {
-      AppLogger.wallet('Relay already connected');
-      return true;
+      // Double-check actual connection state
+      final actualState = _appKit!.core.relayClient.isConnected;
+      if (actualState) {
+        AppLogger.wallet('Relay already connected');
+        return true;
+      }
+      // Cached state was wrong, continue with reconnection
+      _isRelayConnected = false;
+      AppLogger.wallet('Relay cached state was stale, proceeding with reconnection');
     }
 
     AppLogger.wallet('Relay not connected, attempting reconnection...');
@@ -721,6 +890,17 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
     _appKit!.core.relayClient.onRelayClientError.subscribe(onError);
 
     try {
+      // Clean up existing connection state first to prevent "Bad state" errors
+      try {
+        await _appKit!.core.relayClient.disconnect();
+        await Future.delayed(const Duration(milliseconds: 100));
+      } catch (e) {
+        // Ignore disconnect errors - socket may already be closed
+        AppLogger.wallet('Pre-connect disconnect (ignorable)', data: {
+          'error': e.toString(),
+        });
+      }
+
       // Attempt to reconnect relay
       await _appKit!.core.relayClient.connect();
 
@@ -734,7 +914,23 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
 
       return await completer.future;
     } catch (e) {
-      AppLogger.wallet('Relay reconnection exception', data: {'error': e.toString()});
+      // Handle "Bad state" errors gracefully
+      if (e.toString().contains('Bad state')) {
+        AppLogger.wallet('Relay reconnection stream conflict (absorbed)', data: {
+          'error': e.toString(),
+        });
+        // Despite the error, connection might still succeed
+        // Wait briefly and check actual state
+        await Future.delayed(const Duration(milliseconds: 300));
+        final actuallyConnected = _appKit!.core.relayClient.isConnected;
+        if (actuallyConnected) {
+          _isRelayConnected = true;
+          if (!completer.isCompleted) completer.complete(true);
+          return true;
+        }
+      } else {
+        AppLogger.wallet('Relay reconnection exception', data: {'error': e.toString()});
+      }
       if (!completer.isCompleted) {
         completer.complete(false);
       }
