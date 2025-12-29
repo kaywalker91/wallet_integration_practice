@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:wallet_integration_practice/core/core.dart';
+import 'package:wallet_integration_practice/domain/entities/session_validation_result.dart';
 import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
 import 'package:wallet_integration_practice/domain/entities/transaction_entity.dart';
 import 'package:wallet_integration_practice/domain/entities/session_account.dart';
@@ -430,6 +431,76 @@ class WalletService {
       AppLogger.e('WalletService: Session restoration error', e, st);
       return null;
     }
+  }
+
+  /// Validate a persisted session before restoration
+  ///
+  /// Checks if the session is still valid (not expired, relay connected, etc.)
+  /// Returns a SessionValidationResult indicating the validation status.
+  Future<SessionValidationResult> validateSession({
+    required String sessionTopic,
+    required WalletType walletType,
+    required bool isExpired,
+  }) async {
+    AppLogger.wallet('Validating session', data: {
+      'walletType': walletType.name,
+      'isExpired': isExpired,
+    });
+
+    // Check expiration first
+    if (isExpired) {
+      return SessionValidationResult.expired(
+        sessionTopic: sessionTopic,
+        walletType: walletType.name,
+      );
+    }
+
+    // Check network connectivity
+    final connectivity = await ConnectivityService.instance.checkConnectivity();
+    if (connectivity == ConnectivityStatus.offline) {
+      return SessionValidationResult.networkOffline(
+        sessionTopic: sessionTopic,
+        walletType: walletType.name,
+      );
+    }
+
+    // For WalletConnect-based wallets, check relay connection
+    if (_isWalletConnectBased(walletType)) {
+      try {
+        final adapter = _adapters[walletType];
+        if (adapter is WalletConnectAdapter) {
+          final relayConnected = await adapter.ensureRelayConnected();
+          if (!relayConnected) {
+            return SessionValidationResult.relayDisconnected(
+              sessionTopic: sessionTopic,
+              walletType: walletType.name,
+            );
+          }
+        }
+      } catch (e) {
+        AppLogger.w('Session validation failed: $e');
+        return SessionValidationResult.unknown(
+          message: 'Failed to validate session: $e',
+          sessionTopic: sessionTopic,
+          walletType: walletType.name,
+        );
+      }
+    }
+
+    return SessionValidationResult.valid(
+      sessionTopic: sessionTopic,
+      walletType: walletType.name,
+    );
+  }
+
+  /// Check if wallet type uses WalletConnect protocol
+  bool _isWalletConnectBased(WalletType type) {
+    return type == WalletType.walletConnect ||
+        type == WalletType.metamask ||
+        type == WalletType.trustWallet ||
+        type == WalletType.okxWallet ||
+        type == WalletType.coinbase ||
+        type == WalletType.rabby;
   }
 
   /// Set the active adapter and wallet directly.

@@ -1,3 +1,4 @@
+import 'package:wallet_integration_practice/core/utils/logger.dart';
 import 'package:wallet_integration_practice/data/models/persisted_session_model.dart';
 import 'package:wallet_integration_practice/data/models/phantom_session_model.dart';
 import 'package:wallet_integration_practice/domain/entities/multi_session_state.dart';
@@ -161,8 +162,7 @@ class MultiSessionStateModel {
         );
       } catch (e) {
         // Skip corrupted entries, log error
-        // ignore: avoid_print
-        print('Failed to parse session entry ${entry.key}: $e');
+        AppLogger.w('Failed to parse session entry ${entry.key}: $e');
       }
     }
 

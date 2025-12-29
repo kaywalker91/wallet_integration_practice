@@ -159,7 +159,9 @@ class PhantomAdapter extends SolanaWalletAdapter {
       // Clear corrupted data
       try {
         await _localDataSource!.clearPhantomSession();
-      } catch (_) {}
+      } catch (clearError) {
+        AppLogger.w('Failed to clear corrupted Phantom session: $clearError');
+      }
       return false;
     }
   }
@@ -225,7 +227,9 @@ class PhantomAdapter extends SolanaWalletAdapter {
       // Update last used timestamp
       try {
         await _localDataSource?.updatePhantomSessionLastUsed();
-      } catch (_) {}
+      } catch (e) {
+        AppLogger.w('Failed to update Phantom session last used timestamp: $e');
+      }
 
       return wallet;
     }

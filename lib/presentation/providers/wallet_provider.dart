@@ -173,6 +173,7 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
   WalletLocalDataSource get _localDataSource => ref.read(walletLocalDataSourceProvider);
   MultiSessionDataSource get _multiSessionDataSource => ref.read(multiSessionDataSourceProvider);
   StreamSubscription<Uri>? _deepLinkSubscription;
+  StreamSubscription<ConnectivityStatus>? _connectivitySubscription;
 
   /// Timer for approval timeout (shows recovery options after delay)
   Timer? _approvalTimeoutTimer;
@@ -193,6 +194,8 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
     // Cleanup on dispose
     ref.onDispose(() {
       _deepLinkSubscription?.cancel();
+      _connectivitySubscription?.cancel();
+      ConnectivityService.instance.stopMonitoring();
       _cancelApprovalTimeout();
     });
 
@@ -314,11 +317,30 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
     final restorationNotifier = ref.read(sessionRestorationProvider.notifier);
     restorationNotifier.startChecking();
 
+    // Check network connectivity before restoration
+    final connectivityStatus = await ConnectivityService.instance.checkConnectivity();
+    final isOffline = connectivityStatus == ConnectivityStatus.offline;
+    restorationNotifier.setOffline(isOffline);
+
+    if (isOffline) {
+      AppLogger.wallet('Device is offline, skipping session restoration');
+      // Start monitoring for connectivity restoration
+      ConnectivityService.instance.startMonitoring();
+      _setupConnectivityListener(restorationNotifier);
+
+      // Load cached wallet info for offline display
+      await _loadCachedWalletsForOfflineMode(restorationNotifier);
+    }
+
     // Initialize wallet service (also registers deep link handlers)
     await _walletService.initialize();
 
     // Migrate legacy single-session data to multi-session format
-    await _migrateAndRestoreAllSessions();
+    // With timeout to prevent indefinite hanging
+    // Skip restoration if offline (will retry when connectivity restored)
+    final restorationSucceeded = isOffline
+        ? false
+        : await _performRestorationWithTimeout(restorationNotifier);
 
     // Check if WalletService already has a connected wallet
     // (e.g., from AppKit's internal session restoration)
@@ -326,18 +348,90 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
       state = AsyncValue.data(_walletService.connectedWallet);
       // Update persistence with current session (using multi-session storage)
       await _saveSessionForPersistence(_walletService.connectedWallet!);
-    } else {
-      // If no wallet connected after initial restoration attempt,
+    } else if (!restorationSucceeded) {
+      // If restoration timed out and no wallet connected,
       // schedule a delayed retry for cases where network is slow to connect
       _scheduleDelayedRestoration();
     }
 
-    // Mark restoration as complete
-    restorationNotifier.complete();
+    // Mark restoration as complete only if not already marked (timeout/error)
+    final currentPhase = ref.read(sessionRestorationProvider).phase;
+    if (currentPhase == SessionRestorationPhase.restoring ||
+        currentPhase == SessionRestorationPhase.checking) {
+      restorationNotifier.complete();
+    }
 
     // Subscribe to deep link stream for logging
     _deepLinkSubscription = DeepLinkService.instance.deepLinkStream.listen((uri) {
       AppLogger.d('WalletNotifier received deep link: $uri');
+    });
+  }
+
+  /// Perform session restoration with timeout
+  /// Returns true if restoration completed successfully, false if timed out
+  Future<bool> _performRestorationWithTimeout(
+    SessionRestorationNotifier restorationNotifier,
+  ) async {
+    try {
+      // Use a Completer to race between restoration and timeout
+      final completer = Completer<bool>();
+
+      // Start the restoration task (runs in background, completes via completer)
+      unawaited(_migrateAndRestoreAllSessions().then((_) {
+        if (!completer.isCompleted) {
+          completer.complete(true);
+        }
+      }).catchError((e, st) {
+        AppLogger.e('Session restoration failed', e, st);
+        if (!completer.isCompleted) {
+          restorationNotifier.fail(e.toString());
+          completer.complete(false);
+        }
+      }));
+
+      // Set up timeout (runs in background, completes via completer)
+      unawaited(Future.delayed(restorationTimeout).then((_) {
+        if (!completer.isCompleted) {
+          AppLogger.wallet('Session restoration timeout triggered', data: {
+            'timeoutSeconds': restorationTimeout.inSeconds,
+          });
+          final currentState = ref.read(sessionRestorationProvider);
+          restorationNotifier.timeout(restoredCount: currentState.restoredSessions);
+          completer.complete(false);
+        }
+      }));
+
+      // Wait for either completion or timeout
+      return await completer.future;
+    } catch (e, st) {
+      AppLogger.e('Error during restoration with timeout', e, st);
+      restorationNotifier.fail(e.toString());
+      return false;
+    }
+  }
+
+  /// Set up listener for connectivity changes
+  /// When connectivity is restored, attempt session restoration
+  void _setupConnectivityListener(SessionRestorationNotifier restorationNotifier) {
+    _connectivitySubscription?.cancel();
+    _connectivitySubscription = ConnectivityService.instance.statusStream.listen((status) async {
+      if (status == ConnectivityStatus.online) {
+        AppLogger.wallet('Connectivity restored, attempting session restoration');
+        restorationNotifier.setOffline(false);
+
+        // Only attempt restoration if we haven't already restored
+        if (state.value == null && _walletService.connectedWallet == null) {
+          final success = await _performRestorationWithTimeout(restorationNotifier);
+          if (success) {
+            // Stop monitoring once restoration succeeds
+            ConnectivityService.instance.stopMonitoring();
+            unawaited(_connectivitySubscription?.cancel());
+            _connectivitySubscription = null;
+          }
+        }
+      } else if (status == ConnectivityStatus.offline) {
+        restorationNotifier.setOffline(true);
+      }
     });
   }
 
@@ -406,40 +500,59 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
         'activeWalletId': sessionState.activeWalletId,
       });
 
-      // Begin restoration phase with total session count
-      restorationNotifier.beginRestoration(totalSessions: sessionState.count);
+      // Build wallet restoration info list for UI
+      final walletInfoList = sessionState.sessionList.map((entry) {
+        final walletTypeName = _getWalletTypeName(entry);
+        final walletType = _getWalletTypeFromEntry(entry);
+        return WalletRestorationInfo(
+          walletId: entry.walletId,
+          walletName: walletTypeName,
+          walletType: walletType.name,
+          status: WalletRestorationStatus.pending,
+        );
+      }).toList();
+
+      // Begin restoration phase with total session count and wallet list
+      restorationNotifier.beginRestoration(
+        totalSessions: sessionState.count,
+        wallets: walletInfoList,
+      );
 
       // 4. Restore each session with progress updates
       WalletEntity? activeWallet;
-      var restoredCount = 0;
 
       for (final entry in sessionState.sessionList) {
-        // Update progress with current wallet name
-        final walletTypeName = _getWalletTypeName(entry);
-        restorationNotifier.updateProgress(
-          restoredCount: restoredCount,
-          currentWalletName: walletTypeName,
-        );
+        // Mark this wallet as currently restoring
+        restorationNotifier.startWalletRestoration(entry.walletId);
 
-        final wallet = await _restoreSessionEntry(entry);
-        if (wallet != null) {
-          // Register with MultiWalletNotifier
-          ref.read(multiWalletNotifierProvider.notifier).registerWallet(wallet);
+        try {
+          final wallet = await _restoreSessionEntry(entry);
+          if (wallet != null) {
+            // Register with MultiWalletNotifier
+            ref.read(multiWalletNotifierProvider.notifier).registerWallet(wallet);
 
-          // Track the active wallet
-          if (entry.walletId == sessionState.activeWalletId) {
-            activeWallet = wallet;
+            // Track the active wallet
+            if (entry.walletId == sessionState.activeWalletId) {
+              activeWallet = wallet;
+            }
+
+            // Mark wallet as successfully restored
+            restorationNotifier.walletRestorationSuccess(entry.walletId);
+          } else {
+            // Wallet restoration returned null (failed silently)
+            restorationNotifier.walletRestorationFailed(
+              entry.walletId,
+              '복원 실패',
+            );
           }
+        } catch (e) {
+          // Mark wallet as failed with error message
+          restorationNotifier.walletRestorationFailed(
+            entry.walletId,
+            e.toString(),
+          );
         }
-
-        restoredCount++;
       }
-
-      // Final progress update
-      restorationNotifier.updateProgress(
-        restoredCount: restoredCount,
-        currentWalletName: null,
-      );
 
       // 5. Fallback: Try restoring Phantom from legacy storage if not in multi-session
       final restoredWalletsState = ref.read(multiWalletNotifierProvider);
@@ -507,6 +620,67 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
     return 'Wallet';
   }
 
+  /// Get wallet type from session entry
+  WalletType _getWalletTypeFromEntry(dynamic entry) {
+    if (entry.sessionType == SessionType.walletConnect) {
+      final wcSession = entry.walletConnectSession;
+      if (wcSession != null) {
+        return WalletType.values.firstWhere(
+          (t) => t.name == wcSession.walletType,
+          orElse: () => WalletType.walletConnect,
+        );
+      }
+    } else if (entry.sessionType == SessionType.phantom) {
+      return WalletType.phantom;
+    }
+    return WalletType.walletConnect;
+  }
+
+  /// Load cached wallet info for offline mode display
+  /// Shows previously connected wallets even when offline
+  Future<void> _loadCachedWalletsForOfflineMode(
+    SessionRestorationNotifier restorationNotifier,
+  ) async {
+    try {
+      // Get all persisted sessions without network calls
+      final sessionState = await _multiSessionDataSource.getAllSessions();
+      if (sessionState.isEmpty) {
+        AppLogger.wallet('No cached sessions for offline display');
+        restorationNotifier.completeNoSessions();
+        return;
+      }
+
+      // Build wallet info list with "skipped" status (offline)
+      final walletInfoList = sessionState.sessionList.map((entry) {
+        final walletTypeName = _getWalletTypeName(entry);
+        final walletType = _getWalletTypeFromEntry(entry);
+        return WalletRestorationInfo(
+          walletId: entry.walletId,
+          walletName: walletTypeName,
+          walletType: walletType.name,
+          status: WalletRestorationStatus.skipped,
+          errorMessage: '오프라인 - 연결 대기 중',
+        );
+      }).toList();
+
+      AppLogger.wallet('Loaded cached wallets for offline display', data: {
+        'walletCount': walletInfoList.length,
+      });
+
+      // Set up the UI with cached wallet info
+      restorationNotifier.beginRestoration(
+        totalSessions: sessionState.count,
+        wallets: walletInfoList,
+      );
+
+      // Don't complete restoration - we're waiting for connectivity
+      // The UI will show these wallets as "waiting for connection"
+    } catch (e, st) {
+      AppLogger.e('Failed to load cached wallets for offline mode', e, st);
+      restorationNotifier.fail('캐시된 지갑 정보를 불러올 수 없습니다');
+    }
+  }
+
   /// Restore a single session entry
   Future<WalletEntity?> _restoreSessionEntry(
     dynamic entry, // MultiSessionEntryModel
@@ -528,7 +702,7 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
   }
 
   /// Restore a WalletConnect-based session from entry
-  /// Includes retry logic with relay connection waiting
+  /// Includes retry logic with exponential backoff and jitter
   Future<WalletEntity?> _restoreWalletConnectSession(dynamic entry) async {
     final wcSession = entry.walletConnectSession;
     if (wcSession == null) return null;
@@ -551,16 +725,16 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
       'address': persistedSession.address,
     });
 
-    // Attempt restoration with retries
-    // Relay connection might not be ready immediately after cold start
-    const maxRetries = 3;
-    const retryDelays = [
-      Duration(milliseconds: 500),
-      Duration(seconds: 1),
-      Duration(seconds: 2),
-    ];
+    // Use exponential backoff with jitter for retry logic
+    final backoff = ExponentialBackoff(
+      initialDelay: const Duration(milliseconds: 500),
+      maxDelay: const Duration(seconds: 5),
+      multiplier: 2.0,
+      jitterFactor: 0.2,
+      maxRetries: 3,
+    );
 
-    for (var attempt = 0; attempt < maxRetries; attempt++) {
+    while (backoff.hasMoreRetries) {
       // Attempt restoration via WalletService
       final wallet = await _walletService.restoreSession(
         sessionTopic: persistedSession.sessionTopic,
@@ -572,32 +746,37 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
         await _multiSessionDataSource.updateSessionLastUsed(entry.walletId);
         AppLogger.wallet('WalletConnect session restored', data: {
           'address': wallet.address,
-          'attempt': attempt + 1,
+          'attempt': backoff.currentRetry + 1,
         });
         return wallet;
       }
 
-      // If not last attempt, wait before retry
-      if (attempt < maxRetries - 1) {
+      // If more retries available, wait with exponential backoff
+      if (backoff.hasMoreRetries) {
+        final delay = backoff.currentDelay;
         AppLogger.wallet('Session restoration attempt failed, retrying...', data: {
-          'attempt': attempt + 1,
-          'maxRetries': maxRetries,
-          'nextDelay': retryDelays[attempt].inMilliseconds,
+          'attempt': backoff.currentRetry + 1,
+          'maxRetries': backoff.maxRetries,
+          'nextDelayMs': delay.inMilliseconds,
         });
-        await Future.delayed(retryDelays[attempt]);
+        backoff.incrementRetry();
+        await Future.delayed(delay);
+      } else {
+        break;
       }
     }
 
     AppLogger.wallet('WalletConnect session restoration failed after retries', data: {
       'walletType': persistedSession.walletType,
       'address': persistedSession.address,
-      'attempts': maxRetries,
+      'attempts': backoff.maxRetries,
     });
 
     return null;
   }
 
   /// Restore a Phantom session from entry
+  /// Includes retry logic with exponential backoff and jitter
   Future<WalletEntity?> _restorePhantomSessionEntry(dynamic entry) async {
     final phantomSession = entry.phantomSession;
     if (phantomSession == null) return null;
@@ -615,30 +794,66 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
       'cluster': session.cluster,
     });
 
-    // Initialize PhantomAdapter with localDataSource
-    final adapter = await _walletService.initializeAdapter(WalletType.phantom);
-    if (adapter is PhantomAdapter) {
-      adapter.setLocalDataSource(_localDataSource);
+    // Use exponential backoff with jitter for retry logic
+    final backoff = ExponentialBackoff(
+      initialDelay: const Duration(milliseconds: 500),
+      maxDelay: const Duration(seconds: 5),
+      multiplier: 2.0,
+      jitterFactor: 0.2,
+      maxRetries: 3,
+    );
 
-      // Save phantom session to legacy storage for adapter restoration
-      await _localDataSource.savePhantomSession(phantomSession);
+    while (backoff.hasMoreRetries) {
+      try {
+        // Initialize PhantomAdapter with localDataSource
+        final adapter = await _walletService.initializeAdapter(WalletType.phantom);
+        if (adapter is PhantomAdapter) {
+          adapter.setLocalDataSource(_localDataSource);
 
-      // Attempt to restore the session
-      final wallet = await adapter.restoreSession();
+          // Save phantom session to legacy storage for adapter restoration
+          await _localDataSource.savePhantomSession(phantomSession);
 
-      if (wallet != null) {
-        // Set the adapter as active
-        _walletService.setActiveAdapter(adapter, wallet);
+          // Attempt to restore the session
+          final wallet = await adapter.restoreSession();
 
-        // Update last used timestamp
-        await _multiSessionDataSource.updateSessionLastUsed(entry.walletId);
+          if (wallet != null) {
+            // Set the adapter as active
+            _walletService.setActiveAdapter(adapter, wallet);
 
-        AppLogger.wallet('Phantom session restored', data: {
-          'address': wallet.address,
+            // Update last used timestamp
+            await _multiSessionDataSource.updateSessionLastUsed(entry.walletId);
+
+            AppLogger.wallet('Phantom session restored', data: {
+              'address': wallet.address,
+              'attempt': backoff.currentRetry + 1,
+            });
+            return wallet;
+          }
+        }
+      } catch (e) {
+        AppLogger.w('Phantom restoration attempt ${backoff.currentRetry + 1} failed: $e');
+      }
+
+      // If more retries available, wait with exponential backoff
+      if (backoff.hasMoreRetries) {
+        final delay = backoff.currentDelay;
+        AppLogger.wallet('Phantom session restoration attempt failed, retrying...', data: {
+          'attempt': backoff.currentRetry + 1,
+          'maxRetries': backoff.maxRetries,
+          'nextDelayMs': delay.inMilliseconds,
         });
-        return wallet;
+        backoff.incrementRetry();
+        await Future.delayed(delay);
+      } else {
+        break;
       }
     }
+
+    AppLogger.wallet('Phantom session restoration failed after retries', data: {
+      'address': session.connectedAddress,
+      'cluster': session.cluster,
+      'attempts': backoff.maxRetries,
+    });
 
     return null;
   }
@@ -846,9 +1061,13 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
           currentWallet.type.name,
           currentWallet.address,
         );
-        unawaited(_multiSessionDataSource.removeSession(walletId).catchError((_) {}));
+        unawaited(_multiSessionDataSource.removeSession(walletId).catchError((e) {
+          AppLogger.w('Failed to remove session during error cleanup (walletId: $walletId): $e');
+        }));
       }
-      unawaited(_localDataSource.clearPersistedSession().catchError((_) {}));
+      unawaited(_localDataSource.clearPersistedSession().catchError((e) {
+        AppLogger.w('Failed to clear persisted session during error cleanup: $e');
+      }));
 
       state = AsyncValue.error(e, st);
     }
@@ -1288,7 +1507,9 @@ class MultiWalletNotifier extends Notifier<MultiWalletState> {
         entry.wallet.type.name,
         entry.wallet.address,
       );
-      unawaited(_multiSessionDataSource.removeSession(sessionWalletId).catchError((_) {}));
+      unawaited(_multiSessionDataSource.removeSession(sessionWalletId).catchError((removeError) {
+        AppLogger.w('Failed to remove session during error cleanup (sessionWalletId: $sessionWalletId): $removeError');
+      }));
       state = state.removeWallet(walletId);
       AppLogger.e('Multi-wallet: Error during disconnect', e);
     }

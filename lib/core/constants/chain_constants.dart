@@ -18,7 +18,10 @@ class ChainConstants {
   static const int klaytnMainnet = 8217;
   static const int klaytnTestnet = 1001;
 
-  // ILITY Chain (TODO: Replace with actual chain ID when available)
+  // ILITY Chain
+  // NOTE: Placeholder values - Replace with actual chain configuration during integration
+  // Chain ID, RPC URL, and Explorer URL will be provided by the ILITY team
+  // Current values are for development/testing purposes only
   static const int ilityMainnet = 999999;
 
   // Solana Clusters
@@ -139,13 +142,17 @@ class SupportedChains {
     type: ChainType.evm,
   );
 
-  // ILITY Chain (TODO: Replace with actual RPC/Explorer URLs when available)
+  // ILITY Chain
+  // NOTE: Placeholder configuration - Update during integration phase
+  // RPC: Replace with actual RPC endpoint from ILITY team
+  // Explorer: Replace with actual block explorer URL
+  // Symbol: Confirm actual token symbol
   static const ChainInfo ilityMainnet = ChainInfo(
     chainId: ChainConstants.ilityMainnet,
     name: 'ILITY',
     symbol: 'ILT',
-    rpcUrl: 'https://rpc.ility.network',
-    explorerUrl: 'https://explorer.ility.network',
+    rpcUrl: 'https://rpc.ility.network', // Placeholder
+    explorerUrl: 'https://explorer.ility.network', // Placeholder
     type: ChainType.evm,
   );
 

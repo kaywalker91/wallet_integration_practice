@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:wallet_integration_practice/core/constants/app_constants.dart';
 import 'package:wallet_integration_practice/core/errors/exceptions.dart';
+import 'package:wallet_integration_practice/core/utils/logger.dart';
 import 'package:wallet_integration_practice/data/models/multi_session_model.dart';
 import 'package:wallet_integration_practice/data/models/persisted_session_model.dart';
 import 'package:wallet_integration_practice/data/models/phantom_session_model.dart';
@@ -75,10 +76,9 @@ class MultiSessionDataSourceImpl implements MultiSessionDataSource {
       return MultiSessionStateModel.fromJson(
         jsonDecode(json) as Map<String, dynamic>,
       );
-    } catch (e) {
+    } catch (e, st) {
       // Log error but return empty state instead of throwing
-      // ignore: avoid_print
-      print('Failed to get multi-session state: $e');
+      AppLogger.e('Failed to get multi-session state', e, st);
       return MultiSessionStateModel.empty();
     }
   }
@@ -199,7 +199,8 @@ class MultiSessionDataSourceImpl implements MultiSessionDataSource {
       final state = await getAllSessions();
       return state.activeWalletId;
     } catch (e) {
-      // Non-critical, return null
+      // Non-critical, return null but log for diagnostics
+      AppLogger.w('Failed to get active wallet ID: $e');
       return null;
     }
   }
@@ -215,9 +216,8 @@ class MultiSessionDataSourceImpl implements MultiSessionDataSource {
       final updatedState = currentState.addSession(updatedSession);
       await _saveState(updatedState);
     } catch (e) {
-      // Non-critical operation, don't throw
-      // ignore: avoid_print
-      print('Failed to update session last used: $e');
+      // Non-critical operation, don't throw but log for diagnostics
+      AppLogger.w('Failed to update session last used for $walletId: $e');
     }
   }
 
@@ -248,9 +248,8 @@ class MultiSessionDataSourceImpl implements MultiSessionDataSource {
       await _saveState(updatedState);
       return expiredCount;
     } catch (e) {
-      // Non-critical operation, don't throw
-      // ignore: avoid_print
-      print('Failed to remove expired sessions: $e');
+      // Non-critical operation, don't throw but log for diagnostics
+      AppLogger.w('Failed to remove expired sessions: $e');
       return 0;
     }
   }
@@ -337,10 +336,9 @@ class MultiSessionDataSourceImpl implements MultiSessionDataSource {
       }
 
       return migrated;
-    } catch (e) {
+    } catch (e, st) {
       // Migration failed, but don't throw - app can continue without legacy data
-      // ignore: avoid_print
-      print('Session migration failed: $e');
+      AppLogger.e('Session migration failed', e, st);
       return false;
     }
   }

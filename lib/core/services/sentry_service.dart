@@ -511,6 +511,250 @@ class SentryService {
   }
 
   // ============================================================================
+  // Session Restoration Metrics (세션 복원 메트릭)
+  // ============================================================================
+
+  /// Session restoration span holder
+  ISentrySpan? _restorationSpan;
+
+  /// Start session restoration performance tracking
+  ///
+  /// Call at the beginning of cold-start session restoration.
+  /// Returns a span that can be used to track child operations.
+  ISentrySpan? startSessionRestoration({
+    required int totalSessions,
+    bool isOffline = false,
+  }) {
+    if (!_isInitialized) return null;
+
+    _restorationSpan = startTransaction(
+      name: 'session_restoration',
+      operation: 'app.startup',
+    );
+
+    _restorationSpan?.setData('total_sessions', totalSessions);
+    _restorationSpan?.setData('is_offline', isOffline);
+    _restorationSpan?.setData('started_at', DateTime.now().toIso8601String());
+
+    addBreadcrumb(
+      message: 'Session restoration started',
+      category: 'session.restoration',
+      data: {
+        'total_sessions': totalSessions,
+        'is_offline': isOffline,
+      },
+    );
+
+    setTags({
+      'session_restoration': 'in_progress',
+      'session_count': totalSessions.toString(),
+    });
+
+    return _restorationSpan;
+  }
+
+  /// Track individual wallet restoration within the session restoration span
+  ISentrySpan? startWalletRestorationSpan({
+    required String walletId,
+    required String walletType,
+    required String walletName,
+  }) {
+    if (!_isInitialized || _restorationSpan == null) return null;
+
+    final childSpan = _restorationSpan!.startChild(
+      'wallet_restoration',
+      description: '$walletType: $walletName',
+    );
+
+    childSpan.setData('wallet_id', walletId);
+    childSpan.setData('wallet_type', walletType);
+    childSpan.setData('wallet_name', walletName);
+
+    addBreadcrumb(
+      message: 'Wallet restoration started: $walletName',
+      category: 'session.restoration',
+      data: {
+        'wallet_type': walletType,
+        'wallet_id': walletId,
+      },
+    );
+
+    return childSpan;
+  }
+
+  /// Complete individual wallet restoration span
+  void finishWalletRestorationSpan({
+    required ISentrySpan span,
+    required bool success,
+    String? errorMessage,
+    int? retryCount,
+  }) {
+    span.setData('success', success);
+    if (retryCount != null) {
+      span.setData('retry_count', retryCount);
+    }
+    if (errorMessage != null) {
+      span.setData('error', errorMessage);
+    }
+
+    span.status = success ? const SpanStatus.ok() : const SpanStatus.internalError();
+    span.finish();
+  }
+
+  /// Complete session restoration with final metrics
+  void finishSessionRestoration({
+    required int restoredCount,
+    required int failedCount,
+    required Duration duration,
+    bool timedOut = false,
+    bool isOffline = false,
+    String? errorMessage,
+  }) {
+    if (!_isInitialized) return;
+
+    // Update restoration span data
+    if (_restorationSpan != null) {
+      _restorationSpan!.setData('restored_count', restoredCount);
+      _restorationSpan!.setData('failed_count', failedCount);
+      _restorationSpan!.setData('duration_ms', duration.inMilliseconds);
+      _restorationSpan!.setData('timed_out', timedOut);
+      _restorationSpan!.setData('is_offline', isOffline);
+
+      if (errorMessage != null) {
+        _restorationSpan!.setData('error', errorMessage);
+      }
+
+      // Set span status based on outcome
+      if (timedOut) {
+        _restorationSpan!.status = const SpanStatus.deadlineExceeded();
+      } else if (failedCount > 0 && restoredCount == 0) {
+        _restorationSpan!.status = const SpanStatus.internalError();
+      } else if (failedCount > 0) {
+        _restorationSpan!.status = const SpanStatus.ok(); // Partial success
+      } else {
+        _restorationSpan!.status = const SpanStatus.ok();
+      }
+
+      _restorationSpan!.finish();
+      _restorationSpan = null;
+    }
+
+    // Add completion breadcrumb
+    addBreadcrumb(
+      message: timedOut ? 'Session restoration timed out' : 'Session restoration completed',
+      category: 'session.restoration',
+      data: {
+        'restored_count': restoredCount,
+        'failed_count': failedCount,
+        'duration_ms': duration.inMilliseconds,
+        'timed_out': timedOut,
+      },
+      level: failedCount > 0 ? SentryLevel.warning : SentryLevel.info,
+    );
+
+    // Update tags
+    setTags({
+      'session_restoration': timedOut ? 'timed_out' : 'completed',
+      'restoration_success_rate': restoredCount > 0
+          ? '${((restoredCount / (restoredCount + failedCount)) * 100).round()}%'
+          : '0%',
+    });
+
+    // Send metrics message for aggregation
+    captureMessage(
+      'Session restoration ${timedOut ? "timed out" : "completed"}',
+      level: failedCount > 0 ? SentryLevel.warning : SentryLevel.info,
+      extras: {
+        'restored_count': restoredCount,
+        'failed_count': failedCount,
+        'duration_ms': duration.inMilliseconds,
+        'timed_out': timedOut,
+        'is_offline': isOffline,
+        'success_rate': restoredCount > 0
+            ? (restoredCount / (restoredCount + failedCount))
+            : 0.0,
+      },
+      tags: {
+        'event_type': 'session_restoration_metrics',
+        'outcome': timedOut
+            ? 'timeout'
+            : failedCount > 0
+                ? 'partial'
+                : 'success',
+      },
+    );
+  }
+
+  /// Track session restoration failure
+  Future<void> trackSessionRestorationFailure({
+    required dynamic error,
+    StackTrace? stackTrace,
+    int? restoredCount,
+    int? totalSessions,
+    Duration? elapsed,
+  }) async {
+    addBreadcrumb(
+      message: 'Session restoration failed',
+      category: 'session.restoration',
+      data: {
+        'error': error.toString(),
+        if (restoredCount != null) 'restored_count': restoredCount,
+        if (totalSessions != null) 'total_sessions': totalSessions,
+        if (elapsed != null) 'elapsed_ms': elapsed.inMilliseconds,
+      },
+      level: SentryLevel.error,
+    );
+
+    await captureException(
+      error,
+      stackTrace: stackTrace,
+      tags: {
+        'error_type': 'session_restoration',
+        'event_type': 'session_restoration_failure',
+      },
+      extras: {
+        if (restoredCount != null) 'restored_count': restoredCount,
+        if (totalSessions != null) 'total_sessions': totalSessions,
+        if (elapsed != null) 'elapsed_ms': elapsed.inMilliseconds,
+      },
+      level: SentryLevel.error,
+    );
+
+    // Clean up span on failure
+    if (_restorationSpan != null) {
+      _restorationSpan!.status = const SpanStatus.internalError();
+      await _restorationSpan!.finish();
+      _restorationSpan = null;
+    }
+
+    setTag('session_restoration', 'failed');
+  }
+
+  /// Track retry attempt during restoration
+  void trackRestorationRetry({
+    required String walletId,
+    required String walletType,
+    required int attemptNumber,
+    required int maxAttempts,
+    required Duration delay,
+    String? lastError,
+  }) {
+    addBreadcrumb(
+      message: 'Restoration retry attempt $attemptNumber/$maxAttempts',
+      category: 'session.restoration',
+      data: {
+        'wallet_id': walletId,
+        'wallet_type': walletType,
+        'attempt': attemptNumber,
+        'max_attempts': maxAttempts,
+        'delay_ms': delay.inMilliseconds,
+        if (lastError != null) 'last_error': lastError,
+      },
+      level: SentryLevel.warning,
+    );
+  }
+
+  // ============================================================================
   // Device Context (디바이스 정보)
   // ============================================================================
 
@@ -577,19 +821,16 @@ class SentryService {
     final exceptionValue = exception?.value ?? event.message?.formatted ?? 'No message';
 
     // 메인 에러 정보 출력
-    // ignore: avoid_print
-    print('🚨 [Sentry] $exceptionType: $exceptionValue');
+    AppLogger.d('[Sentry] $exceptionType: $exceptionValue');
 
     // 지갑 컨텍스트가 있으면 추가 출력
     if (event.contexts['wallet'] != null) {
-      // ignore: avoid_print
-      print('   📱 Wallet: ${event.contexts['wallet']}');
+      AppLogger.d('   Wallet: ${event.contexts['wallet']}');
     }
 
     // 태그가 있으면 출력
     if (event.tags != null && event.tags!.isNotEmpty) {
-      // ignore: avoid_print
-      print('   🏷️ Tags: ${event.tags}');
+      AppLogger.d('   Tags: ${event.tags}');
     }
   }
 

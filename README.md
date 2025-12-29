@@ -18,6 +18,37 @@ iLity Hub를 위한 지갑 연동 실습
 
 ## 최근 변경 사항
 
+### 2025-12-29: 세션 복원 안정성 및 오프라인 모드 강화
+
+**기능**: 세션 복원 프로세스의 안정성을 대폭 강화하고, 오프라인 상태에서도 캐시된 지갑 정보를 표시하며, 상세한 메트릭 수집 및 보안 로깅을 도입했습니다.
+
+**주요 개선 사항**:
+1.  **세션 복원 안정성 강화**:
+    *   **Exponential Backoff**: WalletConnect 및 Phantom 지갑 복원 재시도 시 지수 백오프(Exponential Backoff) 및 Jitter를 적용하여 네트워크 부하를 줄이고 성공률을 높였습니다.
+    *   **사전 유효성 검사**: 복원 시도 전 세션 만료, 네트워크 연결, Relay 상태를 검증하는 `validateSession` 로직 추가.
+    *   **타임아웃 및 부분 성공**: 전체 복원 타임아웃 처리 및 일부 지갑만 성공했을 경우의 부분 성공(Partial Success) 상태 처리 추가.
+2.  **오프라인 모드 지원**:
+    *   앱 시작 시 오프라인 상태일 경우, 로컬에 캐시된 지갑 정보를 우선 표시하여 "빈 화면" 경험 방지.
+    *   네트워크 연결 복구 시 자동으로 백그라운드에서 세션 복원을 재시도하는 `ConnectivityListener` 도입.
+    *   UI에 오프라인 상태 표시 및 자동 재연결 안내 메시지 추가.
+3.  **상세 UI/UX 개선**:
+    *   **개별 지갑 상태**: 스플래시 화면에서 각 지갑별 복원 상태(대기, 진행중, 성공, 실패)를 리스트 형태로 상세 표시.
+    *   **재시도 옵션**: 실패한 지갑에 대해 개별적으로 재시도할 수 있는 버튼 제공.
+4.  **운영 및 보안 강화**:
+    *   **Production-Safe Logger**: 릴리즈 빌드에서는 민감한 데이터(주소, 키 등)를 마스킹하고 로그 레벨을 조정하는 안전한 로거 도입.
+    *   **Sentry 메트릭**: 세션 복원 소요 시간, 성공률, 실패 원인 등을 상세하게 추적하는 Sentry Span 및 Breadcrumb 추가.
+
+**변경된 파일**:
+- `lib/core/services/sentry_service.dart`: 복원 메트릭 및 Span 추적
+- `lib/core/utils/logger.dart`: 민감 정보 마스킹 및 로그 레벨 분리
+- `lib/presentation/providers/session_restoration_provider.dart`: 개별 지갑 상태 및 오프라인 로직
+- `lib/presentation/providers/wallet_provider.dart`: 백오프 재시도 및 연결 감지
+- `lib/presentation/widgets/splash/session_restoration_splash.dart`: 상세 상태 리스트 UI
+- `lib/wallet/services/wallet_service.dart`: 세션 유효성 검사 로직
+- `docs/ILITY_Mobile_App_PRD_v4.0.md`: PRD 업데이트
+
+---
+
 ### 2025-12-24: Phantom 지갑 레거시 세션 마이그레이션 및 복원 강화
 
 **기능**: 기존 단일 세션 저장소에 저장된 Phantom 지갑 데이터를 새로운 Multi-Session 아키텍처로 안전하게 이관하고, 앱 재시작 시 복원 안정성을 강화했습니다.

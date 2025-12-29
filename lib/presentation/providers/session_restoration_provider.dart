@@ -1,6 +1,84 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:wallet_integration_practice/core/core.dart';
 
+/// Individual wallet restoration status
+enum WalletRestorationStatus {
+  /// Waiting to be restored
+  pending,
+
+  /// Currently being restored
+  restoring,
+
+  /// Successfully restored
+  success,
+
+  /// Failed to restore
+  failed,
+
+  /// Skipped (user requested or timeout)
+  skipped,
+}
+
+/// Individual wallet restoration info for UI display
+class WalletRestorationInfo {
+  const WalletRestorationInfo({
+    required this.walletId,
+    required this.walletName,
+    required this.walletType,
+    this.status = WalletRestorationStatus.pending,
+    this.errorMessage,
+    this.iconPath,
+  });
+
+  /// Unique identifier for this wallet session
+  final String walletId;
+
+  /// Display name for the wallet (e.g., "MetaMask", "Phantom")
+  final String walletName;
+
+  /// Type of wallet (for icon selection)
+  final String walletType;
+
+  /// Current restoration status
+  final WalletRestorationStatus status;
+
+  /// Error message if restoration failed
+  final String? errorMessage;
+
+  /// Optional icon path for the wallet
+  final String? iconPath;
+
+  /// Whether this wallet is currently being processed
+  bool get isProcessing => status == WalletRestorationStatus.restoring;
+
+  /// Whether this wallet's restoration is complete (success or failure)
+  bool get isComplete =>
+      status == WalletRestorationStatus.success ||
+      status == WalletRestorationStatus.failed ||
+      status == WalletRestorationStatus.skipped;
+
+  /// Create a copy with updated fields
+  WalletRestorationInfo copyWith({
+    WalletRestorationStatus? status,
+    String? errorMessage,
+    bool clearError = false,
+  }) {
+    return WalletRestorationInfo(
+      walletId: walletId,
+      walletName: walletName,
+      walletType: walletType,
+      status: status ?? this.status,
+      errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
+      iconPath: iconPath,
+    );
+  }
+
+  @override
+  String toString() {
+    return 'WalletRestorationInfo(id: $walletId, name: $walletName, status: $status)';
+  }
+}
+
 /// Session restoration phase enum
 ///
 /// Represents the current phase of session restoration during app startup.
@@ -19,6 +97,9 @@ enum SessionRestorationPhase {
 
   /// Restoration failed with error
   failed,
+
+  /// Restoration timed out (partial success possible)
+  timedOut,
 }
 
 /// Session restoration state
@@ -32,6 +113,8 @@ class SessionRestorationState {
     this.currentWalletName,
     this.errorMessage,
     this.startedAt,
+    this.isOffline = false,
+    this.wallets = const [],
   });
 
   /// Current restoration phase
@@ -52,15 +135,29 @@ class SessionRestorationState {
   /// When restoration started (for timeout tracking)
   final DateTime? startedAt;
 
+  /// Whether device is offline (no network connectivity)
+  final bool isOffline;
+
+  /// List of individual wallet restoration info for per-wallet status display
+  final List<WalletRestorationInfo> wallets;
+
   /// Whether restoration is in progress
   bool get isRestoring =>
       phase == SessionRestorationPhase.checking ||
       phase == SessionRestorationPhase.restoring;
 
-  /// Whether restoration is complete (success or failure)
+  /// Whether restoration is complete (success, failure, or timeout)
   bool get isComplete =>
       phase == SessionRestorationPhase.completed ||
-      phase == SessionRestorationPhase.failed;
+      phase == SessionRestorationPhase.failed ||
+      phase == SessionRestorationPhase.timedOut;
+
+  /// Whether restoration timed out
+  bool get isTimedOut => phase == SessionRestorationPhase.timedOut;
+
+  /// Whether partial restoration succeeded (some sessions restored before timeout)
+  bool get hasPartialSuccess =>
+      phase == SessionRestorationPhase.timedOut && restoredSessions > 0;
 
   /// Progress percentage (0.0 to 1.0)
   double get progress {
@@ -74,6 +171,26 @@ class SessionRestorationState {
     return DateTime.now().difference(startedAt!);
   }
 
+  /// Number of wallets that failed to restore
+  int get failedCount =>
+      wallets.where((w) => w.status == WalletRestorationStatus.failed).length;
+
+  /// Number of wallets that are still pending
+  int get pendingCount =>
+      wallets.where((w) => w.status == WalletRestorationStatus.pending).length;
+
+  /// Whether any wallet failed to restore
+  bool get hasFailures => failedCount > 0;
+
+  /// Get wallet info by ID
+  WalletRestorationInfo? getWalletById(String walletId) {
+    try {
+      return wallets.firstWhere((w) => w.walletId == walletId);
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Copy with modified fields
   SessionRestorationState copyWith({
     SessionRestorationPhase? phase,
@@ -82,6 +199,8 @@ class SessionRestorationState {
     String? currentWalletName,
     String? errorMessage,
     DateTime? startedAt,
+    bool? isOffline,
+    List<WalletRestorationInfo>? wallets,
     bool clearCurrentWallet = false,
     bool clearError = false,
   }) {
@@ -93,6 +212,8 @@ class SessionRestorationState {
           clearCurrentWallet ? null : (currentWalletName ?? this.currentWalletName),
       errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
       startedAt: startedAt ?? this.startedAt,
+      isOffline: isOffline ?? this.isOffline,
+      wallets: wallets ?? this.wallets,
     );
   }
 
@@ -125,15 +246,108 @@ class SessionRestorationNotifier extends Notifier<SessionRestorationState> {
     );
   }
 
-  /// Begin restoring sessions with total count
-  void beginRestoration({required int totalSessions}) {
+  /// Begin restoring sessions with total count and wallet list
+  void beginRestoration({
+    required int totalSessions,
+    List<WalletRestorationInfo>? wallets,
+  }) {
     AppLogger.wallet('Session restoration: Beginning restoration', data: {
       'totalSessions': totalSessions,
+      'walletCount': wallets?.length ?? 0,
     });
     state = state.copyWith(
       phase: SessionRestorationPhase.restoring,
       totalSessions: totalSessions,
       restoredSessions: 0,
+      wallets: wallets ?? [],
+    );
+  }
+
+  /// Initialize the wallet list for restoration
+  void initWallets(List<WalletRestorationInfo> wallets) {
+    AppLogger.wallet('Session restoration: Initializing wallets', data: {
+      'count': wallets.length,
+      'wallets': wallets.map((w) => w.walletName).toList(),
+    });
+    state = state.copyWith(
+      wallets: wallets,
+      totalSessions: wallets.length,
+    );
+  }
+
+  /// Update individual wallet status
+  void updateWalletStatus({
+    required String walletId,
+    required WalletRestorationStatus status,
+    String? errorMessage,
+  }) {
+    final updatedWallets = state.wallets.map((wallet) {
+      if (wallet.walletId == walletId) {
+        return wallet.copyWith(
+          status: status,
+          errorMessage: errorMessage,
+        );
+      }
+      return wallet;
+    }).toList();
+
+    // Calculate new restored count based on successful wallets
+    final restoredCount = updatedWallets
+        .where((w) => w.status == WalletRestorationStatus.success)
+        .length;
+
+    // Get current wallet name if it's being restored
+    final currentWallet = updatedWallets
+        .cast<WalletRestorationInfo?>()
+        .firstWhere(
+          (w) => w?.status == WalletRestorationStatus.restoring,
+          orElse: () => null,
+        );
+
+    AppLogger.wallet('Session restoration: Wallet status updated', data: {
+      'walletId': walletId,
+      'status': status.name,
+      'restoredCount': restoredCount,
+      'error': errorMessage,
+    });
+
+    state = state.copyWith(
+      wallets: updatedWallets,
+      restoredSessions: restoredCount,
+      currentWalletName: currentWallet?.walletName,
+    );
+  }
+
+  /// Mark a wallet as currently being restored
+  void startWalletRestoration(String walletId) {
+    updateWalletStatus(
+      walletId: walletId,
+      status: WalletRestorationStatus.restoring,
+    );
+  }
+
+  /// Mark a wallet as successfully restored
+  void walletRestorationSuccess(String walletId) {
+    updateWalletStatus(
+      walletId: walletId,
+      status: WalletRestorationStatus.success,
+    );
+  }
+
+  /// Mark a wallet as failed to restore
+  void walletRestorationFailed(String walletId, String error) {
+    updateWalletStatus(
+      walletId: walletId,
+      status: WalletRestorationStatus.failed,
+      errorMessage: error,
+    );
+  }
+
+  /// Retry restoration for a specific wallet
+  void retryWallet(String walletId) {
+    updateWalletStatus(
+      walletId: walletId,
+      status: WalletRestorationStatus.pending,
     );
   }
 
@@ -187,11 +401,28 @@ class SessionRestorationNotifier extends Notifier<SessionRestorationState> {
     );
   }
 
-  /// Skip restoration (user requested or timeout)
+  /// Skip restoration (user requested)
   void skip() {
-    AppLogger.wallet('Session restoration: Skipped by user/timeout');
+    AppLogger.wallet('Session restoration: Skipped by user');
     state = state.copyWith(
       phase: SessionRestorationPhase.completed,
+      clearCurrentWallet: true,
+    );
+  }
+
+  /// Mark restoration as timed out
+  /// Handles partial success case where some sessions were restored
+  void timeout({int? restoredCount}) {
+    final elapsed = state.elapsed;
+    AppLogger.wallet('Session restoration: Timed out', data: {
+      'restoredSessions': restoredCount ?? state.restoredSessions,
+      'totalSessions': state.totalSessions,
+      'elapsedMs': elapsed?.inMilliseconds,
+    });
+    state = state.copyWith(
+      phase: SessionRestorationPhase.timedOut,
+      restoredSessions: restoredCount ?? state.restoredSessions,
+      errorMessage: 'Restoration timed out after ${elapsed?.inSeconds ?? 30}s',
       clearCurrentWallet: true,
     );
   }
@@ -199,6 +430,16 @@ class SessionRestorationNotifier extends Notifier<SessionRestorationState> {
   /// Reset to initial state
   void reset() {
     state = const SessionRestorationState();
+  }
+
+  /// Update offline status
+  void setOffline(bool offline) {
+    if (state.isOffline != offline) {
+      AppLogger.wallet('Session restoration: Offline status changed', data: {
+        'isOffline': offline,
+      });
+      state = state.copyWith(isOffline: offline);
+    }
   }
 }
 
@@ -248,4 +489,45 @@ final restorationErrorProvider = Provider<String?>((ref) {
 final currentRestoringWalletProvider = Provider<String?>((ref) {
   final state = ref.watch(sessionRestorationProvider);
   return state.currentWalletName;
+});
+
+/// Provider for checking if restoration timed out
+final restorationTimedOutProvider = Provider<bool>((ref) {
+  final state = ref.watch(sessionRestorationProvider);
+  return state.isTimedOut;
+});
+
+/// Provider for checking if partial success (some sessions restored before timeout)
+final restorationPartialSuccessProvider = Provider<bool>((ref) {
+  final state = ref.watch(sessionRestorationProvider);
+  return state.hasPartialSuccess;
+});
+
+/// Default restoration timeout duration
+const Duration restorationTimeout = Duration(seconds: 30);
+
+/// Provider for checking if device is offline during restoration
+final restorationOfflineProvider = Provider<bool>((ref) {
+  final state = ref.watch(sessionRestorationProvider);
+  return state.isOffline;
+});
+
+/// Provider for individual wallet restoration info list
+final walletRestorationListProvider = Provider<List<WalletRestorationInfo>>((ref) {
+  final state = ref.watch(sessionRestorationProvider);
+  return state.wallets;
+});
+
+/// Provider for failed wallets (for retry UI)
+final failedWalletsProvider = Provider<List<WalletRestorationInfo>>((ref) {
+  final state = ref.watch(sessionRestorationProvider);
+  return state.wallets
+      .where((w) => w.status == WalletRestorationStatus.failed)
+      .toList();
+});
+
+/// Provider for whether any wallets failed
+final hasWalletFailuresProvider = Provider<bool>((ref) {
+  final state = ref.watch(sessionRestorationProvider);
+  return state.hasFailures;
 });

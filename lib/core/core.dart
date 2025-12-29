@@ -19,10 +19,12 @@ export 'models/wallet_log_models.dart';
 
 // Utils
 export 'utils/address_utils.dart';
+export 'utils/exponential_backoff.dart';
 export 'utils/logger.dart';
 export 'utils/wallet_utils.dart';
 
 // Services
+export 'services/connectivity_service.dart';
 export 'services/debug_log_service.dart';
 export 'services/deep_link_service.dart';
 export 'services/pending_connection_service.dart';

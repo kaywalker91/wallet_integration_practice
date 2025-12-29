@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:wallet_integration_practice/core/core.dart';
 import 'package:wallet_integration_practice/presentation/providers/session_restoration_provider.dart';
+import 'package:wallet_integration_practice/presentation/providers/wallet_provider.dart';
 
 /// Full-screen splash widget displayed during session restoration.
 ///
@@ -139,6 +141,47 @@ class _SessionRestorationSplashState
 
                 const SizedBox(height: 32),
 
+                // Offline indicator with auto-retry message
+                if (restorationState.isOffline)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    margin: const EdgeInsets.only(bottom: 16),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.errorContainer,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.cloud_off_rounded,
+                              size: 18,
+                              color: theme.colorScheme.onErrorContainer,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              '오프라인 상태',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: theme.colorScheme.onErrorContainer,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '인터넷 연결 시 자동으로 복원됩니다',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onErrorContainer.withValues(alpha: 0.8),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
                 // Status text with animated switching
                 AnimatedSwitcher(
                   duration: const Duration(milliseconds: 300),
@@ -158,6 +201,12 @@ class _SessionRestorationSplashState
                   width: 200,
                   child: _buildProgressIndicator(context, theme, restorationState),
                 ),
+
+                const SizedBox(height: 24),
+
+                // Per-wallet status list (shown when there are wallets to restore)
+                if (restorationState.wallets.isNotEmpty)
+                  _buildWalletStatusList(context, theme, restorationState),
 
                 const Spacer(flex: 3),
 
@@ -204,6 +253,24 @@ class _SessionRestorationSplashState
     String text;
     Color textColor = theme.colorScheme.onSurfaceVariant;
 
+    // Show offline-specific message
+    if (state.isOffline) {
+      final hasWallets = state.wallets.isNotEmpty;
+      return Text(
+        hasWallets
+            ? '저장된 지갑 ${state.wallets.length}개 발견'
+            : '네트워크 연결을 기다리는 중...',
+        key: ValueKey('offline-${hasWallets ? 'wallets' : 'waiting'}'),
+        style: theme.textTheme.bodyLarge?.copyWith(
+          color: hasWallets
+              ? theme.colorScheme.primary
+              : theme.colorScheme.onSurfaceVariant,
+          fontWeight: FontWeight.w500,
+        ),
+        textAlign: TextAlign.center,
+      );
+    }
+
     switch (state.phase) {
       case SessionRestorationPhase.initial:
       case SessionRestorationPhase.checking:
@@ -223,6 +290,15 @@ class _SessionRestorationSplashState
       case SessionRestorationPhase.failed:
         text = state.errorMessage ?? '복원 실패';
         textColor = theme.colorScheme.error;
+        break;
+      case SessionRestorationPhase.timedOut:
+        if (state.hasPartialSuccess) {
+          text = '일부 지갑 복원 완료 (${state.restoredSessions}/${state.totalSessions})';
+          textColor = theme.colorScheme.tertiary;
+        } else {
+          text = '연결 시간 초과';
+          textColor = theme.colorScheme.error;
+        }
         break;
     }
 
@@ -286,6 +362,84 @@ class _SessionRestorationSplashState
     ThemeData theme,
     SessionRestorationState state,
   ) {
+    // Show continue button for offline mode (background restoration will continue)
+    if (state.isOffline && state.wallets.isNotEmpty) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          FilledButton.tonal(
+            onPressed: () {
+              // Skip splash and continue to main app
+              // Background connectivity listener will restore when online
+              ref.read(sessionRestorationProvider.notifier).skip();
+            },
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.arrow_forward_rounded,
+                  size: 18,
+                  color: theme.colorScheme.primary,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '오프라인으로 계속하기',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.primary,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '연결되면 자동으로 복원됩니다',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.outline,
+            ),
+          ),
+        ],
+      );
+    }
+
+    // Show retry button for timeout/failed states
+    if (state.phase == SessionRestorationPhase.timedOut ||
+        state.phase == SessionRestorationPhase.failed) {
+      return Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          TextButton(
+            onPressed: () {
+              // Skip and continue to main app
+              ref.read(sessionRestorationProvider.notifier).skip();
+            },
+            child: Text(
+              '건너뛰기',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
+            ),
+          ),
+          const SizedBox(width: 16),
+          FilledButton.tonal(
+            onPressed: () {
+              // Reset state and retry restoration
+              ref.read(sessionRestorationProvider.notifier).reset();
+              // The wallet notifier will need to be invalidated to retry
+              ref.invalidate(walletNotifierProvider);
+            },
+            child: Text(
+              '다시 시도',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.primary,
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
     // Only show skip button during restoration and after timeout
     if (!state.isRestoring) {
       return const SizedBox(height: 48);
@@ -309,5 +463,189 @@ class _SessionRestorationSplashState
         ),
       ),
     );
+  }
+
+  Widget _buildWalletStatusList(
+    BuildContext context,
+    ThemeData theme,
+    SessionRestorationState state,
+  ) {
+    return Container(
+      constraints: const BoxConstraints(maxHeight: 200, maxWidth: 280),
+      child: ListView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        itemCount: state.wallets.length,
+        itemBuilder: (context, index) {
+          final wallet = state.wallets[index];
+          return _WalletStatusTile(
+            wallet: wallet,
+            onRetry: wallet.status == WalletRestorationStatus.failed
+                ? () => _retryWallet(wallet.walletId)
+                : null,
+          );
+        },
+      ),
+    );
+  }
+
+  void _retryWallet(String walletId) {
+    ref.read(sessionRestorationProvider.notifier).retryWallet(walletId);
+    // TODO: Trigger actual wallet restoration retry via wallet provider
+    AppLogger.wallet('Retry requested for wallet', data: {'walletId': walletId});
+  }
+}
+
+/// Individual wallet status tile widget
+class _WalletStatusTile extends StatelessWidget {
+  const _WalletStatusTile({
+    required this.wallet,
+    this.onRetry,
+  });
+
+  final WalletRestorationInfo wallet;
+  final VoidCallback? onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          // Wallet icon
+          _buildWalletIcon(theme),
+          const SizedBox(width: 12),
+
+          // Wallet name and status
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  wallet.walletName,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w500,
+                    color: theme.colorScheme.onSurface,
+                  ),
+                ),
+                if (wallet.errorMessage != null &&
+                    wallet.status == WalletRestorationStatus.failed)
+                  Text(
+                    wallet.errorMessage!,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.error,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+              ],
+            ),
+          ),
+
+          // Status indicator
+          _buildStatusIndicator(theme),
+
+          // Retry button for failed wallets
+          if (wallet.status == WalletRestorationStatus.failed && onRetry != null)
+            Padding(
+              padding: const EdgeInsets.only(left: 8),
+              child: IconButton(
+                onPressed: onRetry,
+                icon: Icon(
+                  Icons.refresh_rounded,
+                  size: 20,
+                  color: theme.colorScheme.primary,
+                ),
+                tooltip: '다시 시도',
+                constraints: const BoxConstraints(
+                  minWidth: 32,
+                  minHeight: 32,
+                ),
+                padding: EdgeInsets.zero,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWalletIcon(ThemeData theme) {
+    IconData iconData;
+    Color iconColor;
+
+    // Choose icon based on wallet type
+    switch (wallet.walletType.toLowerCase()) {
+      case 'phantom':
+        iconData = Icons.account_balance_wallet_outlined;
+        iconColor = const Color(0xFFAB9FF2); // Phantom purple
+        break;
+      case 'metamask':
+        iconData = Icons.account_balance_wallet;
+        iconColor = const Color(0xFFF6851B); // MetaMask orange
+        break;
+      case 'walletconnect':
+        iconData = Icons.link_rounded;
+        iconColor = const Color(0xFF3B99FC); // WalletConnect blue
+        break;
+      default:
+        iconData = Icons.wallet_rounded;
+        iconColor = theme.colorScheme.primary;
+    }
+
+    return Container(
+      width: 32,
+      height: 32,
+      decoration: BoxDecoration(
+        color: iconColor.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Icon(
+        iconData,
+        size: 18,
+        color: iconColor,
+      ),
+    );
+  }
+
+  Widget _buildStatusIndicator(ThemeData theme) {
+    switch (wallet.status) {
+      case WalletRestorationStatus.pending:
+        return Icon(
+          Icons.schedule_rounded,
+          size: 18,
+          color: theme.colorScheme.outline,
+        );
+      case WalletRestorationStatus.restoring:
+        return SizedBox(
+          width: 18,
+          height: 18,
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            valueColor: AlwaysStoppedAnimation<Color>(
+              theme.colorScheme.primary,
+            ),
+          ),
+        );
+      case WalletRestorationStatus.success:
+        return Icon(
+          Icons.check_circle_rounded,
+          size: 18,
+          color: theme.colorScheme.primary,
+        );
+      case WalletRestorationStatus.failed:
+        return Icon(
+          Icons.error_rounded,
+          size: 18,
+          color: theme.colorScheme.error,
+        );
+      case WalletRestorationStatus.skipped:
+        return Icon(
+          Icons.skip_next_rounded,
+          size: 18,
+          color: theme.colorScheme.outline,
+        );
+    }
   }
 }

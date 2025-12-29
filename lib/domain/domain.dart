@@ -9,6 +9,7 @@ export 'entities/multi_session_state.dart';
 export 'entities/balance_entity.dart';
 export 'entities/persisted_session.dart';
 export 'entities/phantom_session.dart';
+export 'entities/session_validation_result.dart';
 
 // Repositories
 export 'repositories/wallet_repository.dart';
