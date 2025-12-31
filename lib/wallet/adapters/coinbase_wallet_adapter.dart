@@ -160,11 +160,39 @@ class CoinbaseWalletAdapter extends EvmWalletAdapter {
     } catch (e) {
          AppLogger.e('Error resetting session', e);
     }
-    
+
     _connectedWallet = null;
     _currentAddress = null;
     _connectionController.add(WalletConnectionStatus.disconnected());
     AppLogger.wallet('Coinbase disconnected');
+  }
+
+  /// Restore adapter state from persisted session data
+  ///
+  /// Coinbase SDK is stateless (request-response based), so we don't need
+  /// to establish an actual connection. We just restore the cached address
+  /// and chainId to restore the connected wallet state.
+  ///
+  /// The SDK will handle authentication on the next actual transaction.
+  void restoreState({
+    required String address,
+    required int chainId,
+  }) {
+    _currentAddress = address;
+    _currentChainId = chainId;
+    _connectedWallet = WalletEntity(
+      address: address,
+      type: walletType,
+      chainId: chainId,
+      connectedAt: DateTime.now(),
+    );
+
+    _connectionController.add(WalletConnectionStatus.connected(_connectedWallet!));
+
+    AppLogger.wallet('Coinbase adapter state restored', data: {
+      'address': address,
+      'chainId': chainId,
+    });
   }
 
   @override

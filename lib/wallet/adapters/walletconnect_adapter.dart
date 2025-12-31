@@ -7,6 +7,9 @@ import 'package:wallet_integration_practice/domain/entities/transaction_entity.d
 import 'package:wallet_integration_practice/domain/entities/session_account.dart';
 import 'package:wallet_integration_practice/wallet/adapters/base_wallet_adapter.dart';
 import 'package:wallet_integration_practice/wallet/models/wallet_adapter_config.dart';
+import 'package:wallet_integration_practice/wallet/models/session_validation_result.dart';
+import 'package:wallet_integration_practice/wallet/models/wallet_reconnection_config.dart';
+import 'package:wallet_integration_practice/wallet/utils/topic_validator.dart';
 
 /// WalletConnect v2 adapter implementation using Reown AppKit
 ///
@@ -944,13 +947,137 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
   }
 
   // ============================================================
+  // Progressive Reconnection (Phase 3.3)
+  // ============================================================
+
+  /// Progressive relay reconnection with wallet-specific configuration.
+  ///
+  /// Uses the wallet type's [WalletReconnectionConfig] to determine
+  /// reconnection timeouts and delays. This generalizes the OKX-specific
+  /// reconnection logic for all wallet types.
+  ///
+  /// Returns true if relay was successfully connected, false otherwise.
+  @protected
+  Future<bool> progressiveRelayReconnect() async {
+    if (!AppConstants.enableGeneralizedReconnectionConfig) {
+      // Fall back to single attempt with default timeout
+      return await ensureRelayConnected();
+    }
+
+    final config = walletType.reconnectionConfig;
+
+    AppLogger.wallet('Progressive relay reconnection starting', data: {
+      'walletType': walletType.name,
+      'timeouts': config.reconnectTimeouts,
+    });
+
+    for (int i = 0; i < config.reconnectTimeouts.length; i++) {
+      final timeoutSeconds = config.reconnectTimeouts[i];
+      AppLogger.wallet('Reconnection attempt ${i + 1}/${config.reconnectTimeouts.length}', data: {
+        'timeout': '${timeoutSeconds}s',
+      });
+
+      final success = await ensureRelayConnected(
+        timeout: Duration(seconds: timeoutSeconds),
+      );
+
+      if (success) {
+        AppLogger.wallet('Progressive reconnection succeeded', data: {
+          'attempt': i + 1,
+        });
+        return true;
+      }
+
+      // Delay before next attempt (except on last iteration)
+      if (i < config.reconnectTimeouts.length - 1) {
+        await Future.delayed(config.reconnectDelay);
+      }
+    }
+
+    AppLogger.wallet('Progressive reconnection failed after all attempts');
+    return false;
+  }
+
+  // ============================================================
   // Session Validation
   // ============================================================
 
-  /// Check if a session matches the expected wallet type.
-  /// Subclasses should override this to filter sessions by wallet name.
-  bool isSessionValid(SessionData session) {
-    return true; // Default: accept any session
+  /// Check if a session matches the expected wallet type and is structurally valid.
+  ///
+  /// Phase 2.2: Enhanced validation with namespace and account checks.
+  /// Subclasses should override [_validateWalletSpecific] to filter by wallet name.
+  ///
+  /// [lenientMode] - When true, skips relay connectivity check.
+  /// Default is controlled by [AppConstants.enableStrictSessionValidation].
+  bool isSessionValid(SessionData session, {bool? lenientMode}) {
+    // Use feature flag if lenientMode not explicitly specified
+    final skipRelayCheck = lenientMode ?? !AppConstants.enableStrictSessionValidation;
+
+    final result = validateSession(session, lenientMode: skipRelayCheck);
+    return result.isValid;
+  }
+
+  /// Validate session with detailed result.
+  ///
+  /// Returns [SessionValidationResult] with specific status and message.
+  SessionValidationResult validateSession(
+    SessionData session, {
+    bool lenientMode = true,
+  }) {
+    // 1. Check eip155 namespace exists
+    final namespace = session.namespaces['eip155'];
+    if (namespace == null) {
+      return SessionValidationResult.invalid(
+        SessionValidationStatus.invalidNamespace,
+        'Session missing eip155 namespace',
+      );
+    }
+
+    // 2. Check accounts exist
+    if (namespace.accounts.isEmpty) {
+      return SessionValidationResult.invalid(
+        SessionValidationStatus.noAccounts,
+        'Session has no accounts',
+      );
+    }
+
+    // 3. Validate account format (eip155:chainId:address)
+    for (final account in namespace.accounts) {
+      final parts = account.split(':');
+      if (parts.length < 3 || parts[2].isEmpty) {
+        return SessionValidationResult.invalid(
+          SessionValidationStatus.invalidNamespace,
+          'Invalid account format: $account',
+        );
+      }
+    }
+
+    // 4. Check relay connection (strict mode only)
+    if (!lenientMode && !_isRelayConnected) {
+      return SessionValidationResult.invalid(
+        SessionValidationStatus.relayDisconnected,
+        'Relay not connected',
+      );
+    }
+
+    // 5. Wallet-specific validation (subclasses override)
+    if (!validateWalletSpecific(session)) {
+      return SessionValidationResult.invalid(
+        SessionValidationStatus.walletMismatch,
+        'Session wallet type mismatch',
+      );
+    }
+
+    return SessionValidationResult.valid();
+  }
+
+  /// Wallet-specific validation hook for subclasses.
+  ///
+  /// Override this method to filter sessions by wallet name/metadata.
+  /// Default implementation accepts any session.
+  @protected
+  bool validateWalletSpecific(SessionData session) {
+    return true;
   }
 
   Future<void> _restoreSession() async {
@@ -1597,35 +1724,88 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
   /// session topic. It attempts to find and restore the session.
   ///
   /// Returns the connected WalletEntity if successful, null otherwise.
-  Future<WalletEntity?> restoreSessionByTopic(String sessionTopic) async {
+  Future<WalletEntity?> restoreSessionByTopic(
+    String sessionTopic, {
+    String? fallbackAddress,
+  }) async {
     if (_appKit == null) {
       AppLogger.wallet('restoreSessionByTopic: AppKit not initialized');
       return null;
     }
 
-    AppLogger.wallet('Attempting to restore session by topic', data: {
-      'sessionTopic': sessionTopic.substring(0, 10),
-    });
-
-    // First ensure relay is connected with longer timeout for cold start
-    // Cold start may require more time for WebSocket connection
-    final relayConnected = await ensureRelayConnected(
-      timeout: const Duration(seconds: 10),
-    );
-    if (!relayConnected) {
-      AppLogger.wallet('restoreSessionByTopic: Relay not connected after extended timeout');
+    // === Phase 1.2: Topic format validation ===
+    final topicValidation = TopicValidator.validate(sessionTopic);
+    if (!topicValidation.isValid) {
+      AppLogger.wallet('restoreSessionByTopic: Invalid topic format', data: {
+        'error': topicValidation.error?.name,
+        'message': topicValidation.message,
+        'topicPreview': TopicValidator.maskForLogging(sessionTopic),
+      });
       return null;
     }
 
+    final validatedTopic = topicValidation.topic!;
+
+    AppLogger.wallet('Attempting to restore session by topic', data: {
+      'sessionTopic': TopicValidator.maskForLogging(validatedTopic),
+    });
+
+    // Use retry logic for relay connection (cold start may need multiple attempts)
+    final relayConnected = await _waitForRelayWithRetry(
+      maxAttempts: 3,
+      initialTimeout: const Duration(seconds: 5),
+    );
+    if (!relayConnected) {
+      AppLogger.wallet('restoreSessionByTopic: Relay not connected after retries');
+      return null;
+    }
+
+    // Small delay after relay connection to allow AppKit internal sync
+    // This helps prevent race conditions where sessions aren't yet available
+    await Future.delayed(const Duration(milliseconds: 300));
+
     // Find the session with matching topic
     final sessions = _appKit!.sessions.getAll();
-    final targetSession = sessions.where((s) => s.topic == sessionTopic).firstOrNull;
+    AppLogger.wallet('Sessions available after relay stabilization', data: {
+      'count': sessions.length,
+      'topics': sessions.map((s) => TopicValidator.maskForLogging(s.topic)).toList(),
+    });
+
+    var targetSession = sessions.where((s) => s.topic == validatedTopic).firstOrNull;
+
+    // === Fallback 1: Search by address ===
+    if (targetSession == null && fallbackAddress != null) {
+      AppLogger.wallet('Topic not found, attempting address fallback', data: {
+        'requestedTopic': TopicValidator.maskForLogging(validatedTopic),
+        'fallbackAddress': fallbackAddress.substring(0, 10),
+        'availableSessions': sessions.length,
+      });
+
+      targetSession = _findSessionByAddress(fallbackAddress);
+
+      if (targetSession != null) {
+        AppLogger.wallet('Session found via address fallback', data: {
+          'newTopic': TopicValidator.maskForLogging(targetSession.topic),
+          'address': fallbackAddress.substring(0, 10),
+        });
+      }
+    }
+
+    // === Fallback 2: Search by wallet metadata ===
+    if (targetSession == null && fallbackAddress != null) {
+      AppLogger.wallet('Address fallback failed, trying metadata search', data: {
+        'walletType': walletType.name,
+        'address': fallbackAddress.substring(0, 10),
+      });
+
+      targetSession = _findSessionByMetadata(fallbackAddress, walletType);
+    }
 
     if (targetSession == null) {
-      AppLogger.wallet('Session not found in AppKit storage', data: {
-        'requestedTopic': sessionTopic.substring(0, 10),
+      AppLogger.wallet('Session not found after all fallback attempts', data: {
+        'requestedTopic': TopicValidator.maskForLogging(validatedTopic),
         'availableSessions': sessions.length,
-        'availableTopics': sessions.map((s) => s.topic.substring(0, 10)).toList(),
+        'availableTopics': sessions.map((s) => TopicValidator.maskForLogging(s.topic)).toList(),
       });
       return null;
     }
@@ -1633,7 +1813,7 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
     // Validate the session
     if (!isSessionValid(targetSession)) {
       AppLogger.wallet('Session found but invalid', data: {
-        'sessionTopic': sessionTopic.substring(0, 10),
+        'sessionTopic': TopicValidator.maskForLogging(targetSession.topic),
       });
       return null;
     }
@@ -1646,7 +1826,7 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
     AppLogger.wallet('Session restored by topic successfully', data: {
       'address': connectedAddress,
       'accountCount': _sessionAccounts.count,
-      'topic': _session!.topic.substring(0, 10),
+      'topic': TopicValidator.maskForLogging(_session!.topic),
       'peerName': _session!.peer.metadata.name,
     });
 
@@ -1662,6 +1842,128 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
       sessionTopic: _session!.topic,
       connectedAt: DateTime.now(),
     );
+  }
+
+  /// Finds a session by wallet address when topic lookup fails.
+  ///
+  /// This is a fallback for scenarios where:
+  /// - Session was re-established with a new topic
+  /// - AppKit internal session rotation occurred
+  /// - Session topic was not properly persisted
+  ///
+  /// Returns the first valid session containing the address, or null if not found.
+  SessionData? _findSessionByAddress(String address) {
+    if (_appKit == null) return null;
+
+    final normalizedAddress = address.toLowerCase();
+    final sessions = _appKit!.sessions.getAll();
+
+    for (final session in sessions) {
+      // Check if session passes wallet-specific validation
+      if (!isSessionValid(session)) continue;
+
+      // Check if session contains the address
+      final namespace = session.namespaces['eip155'];
+      if (namespace == null) continue;
+
+      for (final account in namespace.accounts) {
+        // Account format: eip155:chainId:address
+        final parts = account.split(':');
+        if (parts.length >= 3) {
+          final sessionAddress = parts[2].toLowerCase();
+          if (sessionAddress == normalizedAddress) {
+            return session;
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /// Finds a session by wallet metadata when address lookup fails.
+  ///
+  /// This is an additional fallback that matches sessions by peer name
+  /// (wallet type) and address. Useful when:
+  /// - Topic changed but wallet metadata remains consistent
+  /// - Multiple sessions exist and we need to find the right wallet type
+  ///
+  /// Returns the first matching session, or null if not found.
+  SessionData? _findSessionByMetadata(String address, WalletType walletType) {
+    if (_appKit == null) return null;
+
+    final normalizedAddress = address.toLowerCase();
+    final walletName = walletType.displayName.toLowerCase();
+    final sessions = _appKit!.sessions.getAll();
+
+    for (final session in sessions) {
+      // Check wallet name in peer metadata
+      final peerName = session.peer.metadata.name.toLowerCase();
+      if (!peerName.contains(walletName)) continue;
+
+      // Check if session contains the address
+      final namespace = session.namespaces['eip155'];
+      if (namespace == null) continue;
+
+      for (final account in namespace.accounts) {
+        // Account format: eip155:chainId:address
+        final parts = account.split(':');
+        if (parts.length >= 3) {
+          final sessionAddress = parts[2].toLowerCase();
+          if (sessionAddress == normalizedAddress) {
+            AppLogger.wallet('Session found via metadata fallback', data: {
+              'peerName': peerName,
+              'address': address.substring(0, 10),
+              'topic': TopicValidator.maskForLogging(session.topic),
+            });
+            return session;
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /// Wait for relay connection with exponential backoff retry logic.
+  ///
+  /// Cold start scenarios may require multiple attempts as the WebSocket
+  /// connection takes time to establish. Uses exponential backoff to
+  /// progressively increase timeout while avoiding excessive waiting.
+  Future<bool> _waitForRelayWithRetry({
+    int maxAttempts = 3,
+    Duration initialTimeout = const Duration(seconds: 5),
+  }) async {
+    var timeout = initialTimeout;
+
+    for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+      final connected = await ensureRelayConnected(timeout: timeout);
+
+      if (connected) {
+        AppLogger.wallet('Relay connected', data: {
+          'attempt': attempt,
+          'timeoutSeconds': timeout.inSeconds,
+        });
+        return true;
+      }
+
+      if (attempt < maxAttempts) {
+        // Exponential backoff: increase timeout by 2 seconds each attempt
+        timeout = Duration(seconds: timeout.inSeconds + 2);
+        AppLogger.wallet('Relay connection attempt failed, retrying...', data: {
+          'attempt': attempt,
+          'maxAttempts': maxAttempts,
+          'nextTimeoutSeconds': timeout.inSeconds,
+        });
+        // Small delay before retry
+        await Future.delayed(const Duration(milliseconds: 500));
+      }
+    }
+
+    AppLogger.wallet('Relay connection failed after all retries', data: {
+      'attempts': maxAttempts,
+    });
+    return false;
   }
 
   /// Clear all previous WalletConnect pairings and sessions.

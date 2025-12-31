@@ -1,11 +1,13 @@
 import 'package:equatable/equatable.dart';
+import 'package:wallet_integration_practice/domain/entities/coinbase_session.dart';
 import 'package:wallet_integration_practice/domain/entities/persisted_session.dart';
 import 'package:wallet_integration_practice/domain/entities/phantom_session.dart';
 
 /// Session type discriminator for storage
 enum SessionType {
   walletConnect,
-  phantom;
+  phantom,
+  coinbase;
 
   String get value {
     switch (this) {
@@ -13,6 +15,8 @@ enum SessionType {
         return 'walletConnect';
       case SessionType.phantom:
         return 'phantom';
+      case SessionType.coinbase:
+        return 'coinbase';
     }
   }
 
@@ -22,25 +26,29 @@ enum SessionType {
         return SessionType.walletConnect;
       case 'phantom':
         return SessionType.phantom;
+      case 'coinbase':
+        return SessionType.coinbase;
       default:
         throw ArgumentError('Unknown session type: $value');
     }
   }
 }
 
-/// Unified session entry that can hold either WalletConnect or Phantom session
+/// Unified session entry that can hold WalletConnect, Phantom, or Coinbase session
 class MultiSessionEntry extends Equatable {
   const MultiSessionEntry({
     required this.walletId,
     required this.sessionType,
     this.walletConnectSession,
     this.phantomSession,
+    this.coinbaseSession,
     required this.createdAt,
     required this.lastUsedAt,
   }) : assert(
           (sessionType == SessionType.walletConnect &&
                   walletConnectSession != null) ||
-              (sessionType == SessionType.phantom && phantomSession != null),
+              (sessionType == SessionType.phantom && phantomSession != null) ||
+              (sessionType == SessionType.coinbase && coinbaseSession != null),
           'Session data must match session type',
         );
 
@@ -72,11 +80,25 @@ class MultiSessionEntry extends Equatable {
     );
   }
 
+  /// Create entry for Coinbase session
+  factory MultiSessionEntry.fromCoinbase({
+    required String walletId,
+    required CoinbaseSession session,
+  }) {
+    return MultiSessionEntry(
+      walletId: walletId,
+      sessionType: SessionType.coinbase,
+      coinbaseSession: session,
+      createdAt: session.createdAt,
+      lastUsedAt: session.lastUsedAt,
+    );
+  }
+
   /// Unique identifier for this wallet session
   /// Format: {walletType}_{address} (e.g., "metamask_0x123..." or "phantom_ABC...")
   final String walletId;
 
-  /// Type of session (walletConnect or phantom)
+  /// Type of session (walletConnect, phantom, or coinbase)
   final SessionType sessionType;
 
   /// WalletConnect-based session data (if sessionType == walletConnect)
@@ -84,6 +106,9 @@ class MultiSessionEntry extends Equatable {
 
   /// Phantom session data (if sessionType == phantom)
   final PhantomSession? phantomSession;
+
+  /// Coinbase session data (if sessionType == coinbase)
+  final CoinbaseSession? coinbaseSession;
 
   /// Session creation timestamp
   final DateTime createdAt;
@@ -98,6 +123,8 @@ class MultiSessionEntry extends Equatable {
         return walletConnectSession?.isExpired ?? true;
       case SessionType.phantom:
         return phantomSession?.isExpired ?? true;
+      case SessionType.coinbase:
+        return coinbaseSession?.isExpired ?? true;
     }
   }
 
@@ -108,6 +135,8 @@ class MultiSessionEntry extends Equatable {
         return walletConnectSession?.address ?? '';
       case SessionType.phantom:
         return phantomSession?.connectedAddress ?? '';
+      case SessionType.coinbase:
+        return coinbaseSession?.address ?? '';
     }
   }
 
@@ -118,6 +147,8 @@ class MultiSessionEntry extends Equatable {
         return walletConnectSession?.walletType ?? '';
       case SessionType.phantom:
         return 'phantom';
+      case SessionType.coinbase:
+        return 'coinbase';
     }
   }
 
@@ -129,6 +160,7 @@ class MultiSessionEntry extends Equatable {
       sessionType: sessionType,
       walletConnectSession: walletConnectSession?.markAsUsed(),
       phantomSession: phantomSession?.markAsUsed(),
+      coinbaseSession: coinbaseSession?.markAsUsed(),
       createdAt: createdAt,
       lastUsedAt: now,
     );
@@ -140,6 +172,7 @@ class MultiSessionEntry extends Equatable {
         sessionType,
         walletConnectSession,
         phantomSession,
+        coinbaseSession,
         createdAt,
         lastUsedAt,
       ];

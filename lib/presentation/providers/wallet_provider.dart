@@ -5,6 +5,7 @@ import 'package:wallet_integration_practice/core/core.dart';
 import 'package:wallet_integration_practice/data/datasources/local/wallet_local_datasource.dart';
 import 'package:wallet_integration_practice/data/datasources/local/multi_session_datasource.dart';
 import 'package:wallet_integration_practice/data/models/persisted_session_model.dart';
+import 'package:wallet_integration_practice/data/models/coinbase_session_model.dart';
 import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
 import 'package:wallet_integration_practice/domain/entities/connected_wallet_entry.dart';
 import 'package:wallet_integration_practice/domain/entities/multi_wallet_state.dart';
@@ -16,6 +17,167 @@ import 'package:wallet_integration_practice/presentation/providers/session_resto
 
 /// Sentry 서비스 인스턴스 (편의를 위한 getter)
 SentryService get _sentry => SentryService.instance;
+
+// ============================================================================
+// Phase 1.3: Persistence Retry Queue
+// ============================================================================
+
+/// Item in the persistence retry queue
+class _PersistenceRetryItem {
+  _PersistenceRetryItem({
+    required this.wallet,
+    required this.operation,
+    DateTime? scheduledAt,
+  })  : retryCount = 0,
+        scheduledAt = scheduledAt ?? DateTime.now();
+
+  final WalletEntity wallet;
+  final Future<void> Function() operation;
+  int retryCount;
+  DateTime scheduledAt;
+
+  /// Check if this item is ready for retry
+  bool get isReady => DateTime.now().isAfter(scheduledAt);
+
+  /// Schedule next retry with exponential backoff
+  void scheduleNextRetry() {
+    retryCount++;
+    // Exponential backoff: 5s, 10s, 20s
+    final delay = AppConstants.persistenceRetryInterval *
+        (1 << (retryCount - 1).clamp(0, 2));
+    scheduledAt = DateTime.now().add(delay);
+  }
+}
+
+/// Queue for retrying failed persistence operations
+///
+/// When session persistence fails (e.g., due to network issues),
+/// the operation is added to this queue and retried with exponential backoff.
+class _PersistenceRetryQueue {
+  _PersistenceRetryQueue();
+
+  final List<_PersistenceRetryItem> _queue = [];
+  Timer? _processTimer;
+  bool _isProcessing = false;
+
+  /// Whether the queue is currently active
+  bool get isActive => _queue.isNotEmpty || _isProcessing;
+
+  /// Number of items in the queue
+  int get length => _queue.length;
+
+  /// Enqueue a failed persistence operation for retry
+  void enqueue(WalletEntity wallet, Future<void> Function() operation) {
+    if (!AppConstants.enablePersistenceRetryQueue) {
+      AppLogger.wallet('Persistence retry queue disabled, skipping enqueue');
+      return;
+    }
+
+    // Check if already queued for this wallet
+    final existing = _queue.indexWhere(
+      (item) => item.wallet.address == wallet.address &&
+          item.wallet.type == wallet.type,
+    );
+
+    if (existing >= 0) {
+      // Update existing item's retry count and reschedule
+      _queue[existing].scheduleNextRetry();
+      AppLogger.wallet('Persistence retry rescheduled', data: {
+        'address': wallet.address,
+        'retryCount': _queue[existing].retryCount,
+      });
+    } else {
+      // Add new item
+      _queue.add(_PersistenceRetryItem(
+        wallet: wallet,
+        operation: operation,
+      ));
+      AppLogger.wallet('Persistence operation queued for retry', data: {
+        'address': wallet.address,
+        'queueLength': _queue.length,
+      });
+    }
+
+    // Start processing if not already running
+    _startProcessing();
+  }
+
+  /// Start the queue processor
+  void _startProcessing() {
+    if (_processTimer != null) return;
+
+    // Check every second for ready items
+    _processTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      _processQueue();
+    });
+  }
+
+  /// Process ready items in the queue
+  Future<void> _processQueue() async {
+    if (_isProcessing || _queue.isEmpty) return;
+
+    _isProcessing = true;
+
+    try {
+      // Find ready items
+      final readyItems = _queue.where((item) => item.isReady).toList();
+
+      for (final item in readyItems) {
+        // Check max retries
+        if (item.retryCount >= AppConstants.maxPersistenceRetries) {
+          AppLogger.wallet('Persistence retry exhausted', data: {
+            'address': item.wallet.address,
+            'maxRetries': AppConstants.maxPersistenceRetries,
+          });
+          _queue.remove(item);
+          continue;
+        }
+
+        try {
+          AppLogger.wallet('Retrying persistence operation', data: {
+            'address': item.wallet.address,
+            'attempt': item.retryCount + 1,
+          });
+
+          await item.operation();
+
+          // Success - remove from queue
+          _queue.remove(item);
+          AppLogger.wallet('Persistence retry succeeded', data: {
+            'address': item.wallet.address,
+          });
+        } catch (e) {
+          // Failed - schedule next retry
+          item.scheduleNextRetry();
+          AppLogger.wallet('Persistence retry failed, rescheduling', data: {
+            'address': item.wallet.address,
+            'nextRetry': item.scheduledAt.toIso8601String(),
+            'error': e.toString(),
+          });
+        }
+      }
+
+      // Stop timer if queue is empty
+      if (_queue.isEmpty) {
+        _stopProcessing();
+      }
+    } finally {
+      _isProcessing = false;
+    }
+  }
+
+  /// Stop the queue processor
+  void _stopProcessing() {
+    _processTimer?.cancel();
+    _processTimer = null;
+  }
+
+  /// Dispose the queue
+  void dispose() {
+    _stopProcessing();
+    _queue.clear();
+  }
+}
 
 /// Provider for DeepLinkService
 final deepLinkServiceProvider = Provider<DeepLinkService>((ref) {
@@ -200,6 +362,9 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
   StreamSubscription<Uri>? _deepLinkSubscription;
   StreamSubscription<ConnectivityStatus>? _connectivitySubscription;
 
+  /// Phase 1.3: Persistence retry queue for failed session saves
+  final _persistenceRetryQueue = _PersistenceRetryQueue();
+
   /// Timer for approval timeout (shows recovery options after delay)
   Timer? _approvalTimeoutTimer;
 
@@ -224,6 +389,7 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
       _softTimeoutRecoveryTimer?.cancel();
       ConnectivityService.instance.stopMonitoring();
       _cancelApprovalTimeout();
+      _persistenceRetryQueue.dispose();
     });
 
     return const AsyncValue.data(null);
@@ -359,78 +525,121 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
   // ============================================================================
 
   /// Save session for persistence after successful connection
+  ///
+  /// Phase 1.3: On failure, enqueues to retry queue for automatic retry
   Future<void> _saveSessionForPersistence(WalletEntity wallet) async {
     try {
-      // Generate wallet ID
-      final walletId = WalletIdGenerator.generate(wallet.type.name, wallet.address);
+      await _performSessionPersistence(wallet);
+    } catch (e, st) {
+      // Phase 1.3: Enqueue for retry instead of just logging
+      AppLogger.e('Failed to persist session, enqueueing for retry', e, st);
 
-      // For WalletConnect-based wallets
-      if (_isWalletConnectBased(wallet.type)) {
-        // Get session topic from WalletService
-        final sessionTopic = await _walletService.getSessionTopic();
-        if (sessionTopic == null) {
-          AppLogger.wallet('No session topic available, skipping persistence', data: {
-            'walletType': wallet.type.name,
-          });
-          return;
-        }
+      _persistenceRetryQueue.enqueue(
+        wallet,
+        () => _performSessionPersistence(wallet),
+      );
+    }
+  }
 
-        final now = DateTime.now();
-        final session = PersistedSessionModel(
-          walletType: wallet.type.name,
-          sessionTopic: sessionTopic,
-          address: wallet.address,
-          chainId: wallet.chainId,
-          cluster: wallet.cluster,
-          createdAt: now,
-          lastUsedAt: now,
-          expiresAt: now.add(const Duration(days: 7)), // 7-day expiration
-        );
+  /// Perform the actual session persistence operation
+  ///
+  /// Separated from _saveSessionForPersistence to enable retry queue
+  Future<void> _performSessionPersistence(WalletEntity wallet) async {
+    // Generate wallet ID
+    final walletId = WalletIdGenerator.generate(wallet.type.name, wallet.address);
 
-        // Save to multi-session storage
-        await _multiSessionDataSource.saveWalletConnectSession(
+    // For WalletConnect-based wallets
+    if (_isWalletConnectBased(wallet.type)) {
+      // Get session topic from WalletService
+      final sessionTopic = await _walletService.getSessionTopic();
+      if (sessionTopic == null) {
+        AppLogger.wallet('No session topic available, skipping persistence', data: {
+          'walletType': wallet.type.name,
+        });
+        return;
+      }
+
+      final now = DateTime.now();
+      final session = PersistedSessionModel(
+        walletType: wallet.type.name,
+        sessionTopic: sessionTopic,
+        address: wallet.address,
+        chainId: wallet.chainId,
+        cluster: wallet.cluster,
+        createdAt: now,
+        lastUsedAt: now,
+        expiresAt: now.add(const Duration(days: 7)), // 7-day expiration
+      );
+
+      // Save to multi-session storage
+      await _multiSessionDataSource.saveWalletConnectSession(
+        walletId: walletId,
+        session: session,
+      );
+
+      // Set as active wallet
+      await _multiSessionDataSource.setActiveWalletId(walletId);
+
+      AppLogger.wallet('Session persisted to multi-session storage', data: {
+        'walletId': walletId,
+        'walletType': wallet.type.name,
+        'address': wallet.address,
+      });
+    } else if (wallet.type == WalletType.phantom) {
+      // Phantom session is saved by the adapter, we just need to add to multi-session
+      final phantomSession = await _localDataSource.getPhantomSession();
+      if (phantomSession != null) {
+        await _multiSessionDataSource.savePhantomSession(
           walletId: walletId,
-          session: session,
+          session: phantomSession,
         );
-
-        // Set as active wallet
         await _multiSessionDataSource.setActiveWalletId(walletId);
 
-        AppLogger.wallet('Session persisted to multi-session storage', data: {
+        AppLogger.wallet('Phantom session persisted to multi-session storage', data: {
           'walletId': walletId,
-          'walletType': wallet.type.name,
           'address': wallet.address,
         });
-      } else if (wallet.type == WalletType.phantom) {
-        // Phantom session is saved by the adapter, we just need to add to multi-session
-        final phantomSession = await _localDataSource.getPhantomSession();
-        if (phantomSession != null) {
-          await _multiSessionDataSource.savePhantomSession(
-            walletId: walletId,
-            session: phantomSession,
-          );
-          await _multiSessionDataSource.setActiveWalletId(walletId);
-
-          AppLogger.wallet('Phantom session persisted to multi-session storage', data: {
-            'walletId': walletId,
-            'address': wallet.address,
-          });
-        }
       }
-    } catch (e, st) {
-      // Non-critical operation, log but don't throw
-      AppLogger.e('Failed to persist session', e, st);
+    } else if (_isNativeSdkBased(wallet.type)) {
+      // Native SDK wallets (Coinbase) - store address-based session
+      // No session topic needed - SDK is stateless/request-response based
+      final now = DateTime.now();
+      final session = CoinbaseSessionModel(
+        address: wallet.address,
+        chainId: wallet.chainId ?? 1,
+        createdAt: now,
+        lastUsedAt: now,
+        expiresAt: now.add(const Duration(days: 30)), // 30-day expiration
+      );
+
+      await _multiSessionDataSource.saveCoinbaseSession(
+        walletId: walletId,
+        session: session,
+      );
+      await _multiSessionDataSource.setActiveWalletId(walletId);
+
+      AppLogger.wallet('Coinbase session persisted to multi-session storage', data: {
+        'walletId': walletId,
+        'address': wallet.address,
+        'chainId': wallet.chainId,
+      });
     }
   }
 
   /// Check if wallet type uses WalletConnect protocol
+  /// Note: Coinbase uses Native SDK, not WalletConnect
   bool _isWalletConnectBased(WalletType type) {
     return type == WalletType.walletConnect ||
         type == WalletType.metamask ||
         type == WalletType.trustWallet ||
         type == WalletType.okxWallet ||
-        type == WalletType.coinbase ||
         type == WalletType.rabby;
+  }
+
+  /// Check if wallet type uses Native SDK (not WalletConnect)
+  /// These wallets require different persistence strategy
+  bool _isNativeSdkBased(WalletType type) {
+    return type == WalletType.coinbase;
   }
 
   Future<void> _init() async {
@@ -830,6 +1039,8 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
         return await _restoreWalletConnectSession(entry);
       } else if (entry.sessionType == SessionType.phantom) {
         return await _restorePhantomSessionEntry(entry);
+      } else if (entry.sessionType == SessionType.coinbase) {
+        return await _restoreCoinbaseSessionEntry(entry);
       }
       return null;
     } catch (e, st) {
@@ -875,9 +1086,11 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
 
     while (backoff.hasMoreRetries) {
       // Attempt restoration via WalletService
+      // Pass address as fallback for session lookup when topic changes
       final wallet = await _walletService.restoreSession(
         sessionTopic: persistedSession.sessionTopic,
         walletType: walletType,
+        fallbackAddress: persistedSession.address,
       );
 
       if (wallet != null) {
@@ -992,6 +1205,69 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
       'address': session.connectedAddress,
       'cluster': session.cluster,
       'attempts': backoff.maxRetries,
+    });
+
+    return null;
+  }
+
+  /// Restore a Coinbase session from entry
+  /// Coinbase SDK is stateless (request-response), so no actual reconnection needed
+  /// We just restore the adapter state from persisted address/chainId
+  Future<WalletEntity?> _restoreCoinbaseSessionEntry(dynamic entry) async {
+    final coinbaseSession = entry.coinbaseSession;
+    if (coinbaseSession == null) return null;
+
+    final session = coinbaseSession.toEntity();
+    if (session.isExpired) {
+      AppLogger.wallet('Coinbase session expired', data: {
+        'walletId': entry.walletId,
+      });
+      return null;
+    }
+
+    AppLogger.wallet('Attempting Coinbase session restoration', data: {
+      'address': session.address,
+      'chainId': session.chainId,
+    });
+
+    try {
+      // Coinbase SDK is stateless - we just need to restore adapter state
+      // No actual reconnection required unlike WalletConnect
+      final adapter = await _walletService.initializeAdapter(WalletType.coinbase);
+      if (adapter is CoinbaseWalletAdapter) {
+        // Restore adapter state with persisted address/chainId
+        adapter.restoreState(
+          address: session.address,
+          chainId: session.chainId,
+        );
+
+        // Create wallet entity from restored state
+        final wallet = WalletEntity(
+          address: session.address,
+          type: WalletType.coinbase,
+          chainId: session.chainId,
+          connectedAt: session.createdAt,
+        );
+
+        // Set the adapter as active
+        _walletService.setActiveAdapter(adapter, wallet);
+
+        // Update last used timestamp
+        await _multiSessionDataSource.updateSessionLastUsed(entry.walletId);
+
+        AppLogger.wallet('Coinbase session restored', data: {
+          'address': wallet.address,
+          'chainId': wallet.chainId,
+        });
+        return wallet;
+      }
+    } catch (e) {
+      AppLogger.w('Coinbase restoration failed: $e');
+    }
+
+    AppLogger.wallet('Coinbase session restoration failed', data: {
+      'address': session.address,
+      'chainId': session.chainId,
     });
 
     return null;
@@ -1812,6 +2088,28 @@ class MultiWalletNotifier extends Notifier<MultiWalletState> {
             'walletId': walletId,
           });
         }
+      } else if (_isNativeSdkBased(wallet.type)) {
+        // Coinbase uses Native SDK - save address and chainId for state restoration
+        final now = DateTime.now();
+        final session = CoinbaseSessionModel(
+          address: wallet.address,
+          chainId: wallet.chainId ?? 1,
+          createdAt: now,
+          lastUsedAt: now,
+          expiresAt: now.add(const Duration(days: 30)), // 30-day validity
+        );
+
+        await _multiSessionDataSource.saveCoinbaseSession(
+          walletId: walletId,
+          session: session,
+        );
+        await _multiSessionDataSource.setActiveWalletId(walletId);
+
+        AppLogger.wallet('MultiWallet: Coinbase session saved', data: {
+          'walletId': walletId,
+          'address': wallet.address,
+          'chainId': wallet.chainId,
+        });
       }
     } catch (e, st) {
       AppLogger.e('Failed to save wallet session in MultiWallet', e, st);
@@ -1819,13 +2117,19 @@ class MultiWalletNotifier extends Notifier<MultiWalletState> {
   }
 
   /// Check if wallet type uses WalletConnect protocol
+  /// Note: Coinbase uses Native SDK, not WalletConnect
   bool _isWalletConnectBased(WalletType type) {
     return type == WalletType.walletConnect ||
         type == WalletType.metamask ||
         type == WalletType.trustWallet ||
         type == WalletType.okxWallet ||
-        type == WalletType.coinbase ||
         type == WalletType.rabby;
+  }
+
+  /// Check if wallet type uses Native SDK (not WalletConnect)
+  /// These wallets require different persistence strategy
+  bool _isNativeSdkBased(WalletType type) {
+    return type == WalletType.coinbase;
   }
 }
 

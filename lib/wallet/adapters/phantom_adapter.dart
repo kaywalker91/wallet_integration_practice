@@ -214,6 +214,13 @@ class PhantomAdapter extends SolanaWalletAdapter {
 
     // Already connected - return immediately
     if (isConnected) {
+      // Phase 2.3: Validate encryption keys before accepting restored session
+      if (AppConstants.enablePhantomKeyValidation && !_validateEncryptionKeys()) {
+        AppLogger.wallet('Phantom keys invalid during restoration, disconnecting');
+        await disconnect();
+        return null;
+      }
+
       final wallet = WalletEntity(
         address: _connectedAddress!,
         type: walletType,
@@ -241,6 +248,13 @@ class PhantomAdapter extends SolanaWalletAdapter {
       final restored = await _tryRestoreFromStorage();
 
       if (restored && _connectedAddress != null) {
+        // Phase 2.3: Validate encryption keys before accepting restored session
+        if (AppConstants.enablePhantomKeyValidation && !_validateEncryptionKeys()) {
+          AppLogger.wallet('Phantom keys invalid after late restoration, disconnecting');
+          await disconnect();
+          return null;
+        }
+
         final wallet = WalletEntity(
           address: _connectedAddress!,
           type: walletType,
@@ -263,6 +277,33 @@ class PhantomAdapter extends SolanaWalletAdapter {
     // No valid session available
     AppLogger.wallet('Phantom session restoration failed - no valid session');
     return null;
+  }
+
+  /// Phase 2.3: Validate Phantom encryption keys
+  ///
+  /// Returns true if encryption keys are valid and ready for signing.
+  /// Checks that both dApp private key and Phantom public key are present
+  /// and have the correct format.
+  bool _validateEncryptionKeys() {
+    if (_dappPrivateKey == null) {
+      AppLogger.wallet('Phantom key validation failed: dApp private key is null');
+      return false;
+    }
+
+    if (_phantomPublicKey == null) {
+      AppLogger.wallet('Phantom key validation failed: Phantom public key is null');
+      return false;
+    }
+
+    if (_phantomPublicKey!.length != 32) {
+      AppLogger.wallet('Phantom key validation failed: public key has wrong length', data: {
+        'expected': 32,
+        'actual': _phantomPublicKey!.length,
+      });
+      return false;
+    }
+
+    return true;
   }
 
   /// Generate X25519 key pair for Phantom deep link encryption

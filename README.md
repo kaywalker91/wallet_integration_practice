@@ -18,6 +18,37 @@ iLity Hub를 위한 지갑 연동 실습
 
 ## 최근 변경 사항
 
+### 2025-12-31: Coinbase 세션 지속성 수정 및 세션 복원 안정화
+
+**기능**: Coinbase 지갑의 세션이 앱 재시작 후에도 유지되지 않던 문제를 해결하고, 세션 복원 아키텍처를 개선했습니다.
+
+**해결된 문제**:
+
+1.  **Coinbase 세션 저장 누락**
+    *   **증상**: Coinbase 지갑 연결 후 앱을 종료하고 재시작하면 세션이 복원되지 않음
+    *   **원인**: `MultiWalletNotifier._saveWalletSession()` 메서드에 Coinbase 세션 저장 분기가 없어서 세션이 저장되지 않음
+    *   **해결**: `_isNativeSdkBased()` 체크를 통해 Coinbase 세션을 `CoinbaseSessionModel`로 저장하는 로직 추가
+    *   **결과**: 앱 재시작 후 "Coinbase session restored" 로그와 함께 세션 정상 복원
+
+2.  **MetaMask/WalletConnect 세션 복원 한계 문서화**
+    *   **증상**: MetaMask 연결 후 앱 강제 종료 시 세션 복원 실패
+    *   **원인**: WalletConnect AppKit이 SharedPreferences에 비동기로 세션을 저장하는데, 앱이 강제 종료되면 저장이 완료되지 않을 수 있음 ([GitHub Issue #32](https://github.com/WalletConnect/WalletConnectModalFlutter/issues/32) 참고)
+    *   **현재 동작**: 복원 실패 시 사용자에게 재연결 요청
+
+**개선된 세션 관리 아키텍처**:
+
+| 지갑 유형 | 저장 방식 | 복원 전략 |
+|-----------|-----------|-----------|
+| Coinbase | `CoinbaseSessionModel` (FlutterSecureStorage) | 주소/chainId 기반 상태 복원 - SDK stateless |
+| MetaMask/Trust/OKX | `PersistedSessionModel` (FlutterSecureStorage) + AppKit 내부 스토리지 | Topic 기반 세션 복원 (AppKit 의존) |
+| Phantom | `PhantomSessionModel` (FlutterSecureStorage) | 암호화 키 기반 세션 복원 |
+
+**변경된 파일**:
+- `lib/presentation/providers/wallet_provider.dart`: Coinbase 세션 저장 로직 추가
+- `lib/wallet/adapters/coinbase_wallet_adapter.dart`: `restoreState()` 메서드 활용
+
+---
+
 ### 2025-12-30: OKX 지갑 연결 안정성 대폭 개선
 
 **기능**: OKX 지갑 연결 시 발생하던 두 가지 주요 문제를 해결했습니다.

@@ -6,6 +6,7 @@ import 'package:wallet_integration_practice/core/utils/logger.dart';
 import 'package:wallet_integration_practice/data/models/multi_session_model.dart';
 import 'package:wallet_integration_practice/data/models/persisted_session_model.dart';
 import 'package:wallet_integration_practice/data/models/phantom_session_model.dart';
+import 'package:wallet_integration_practice/data/models/coinbase_session_model.dart';
 import 'package:wallet_integration_practice/domain/entities/multi_session_state.dart';
 
 /// Storage key for multi-session state
@@ -26,6 +27,12 @@ abstract class MultiSessionDataSource {
   Future<void> savePhantomSession({
     required String walletId,
     required PhantomSessionModel session,
+  });
+
+  /// Save a Coinbase session
+  Future<void> saveCoinbaseSession({
+    required String walletId,
+    required CoinbaseSessionModel session,
   });
 
   /// Get a specific session by walletId
@@ -135,6 +142,27 @@ class MultiSessionDataSourceImpl implements MultiSessionDataSource {
     } catch (e) {
       throw StorageException(
         message: 'Failed to save Phantom session',
+        originalException: e,
+      );
+    }
+  }
+
+  @override
+  Future<void> saveCoinbaseSession({
+    required String walletId,
+    required CoinbaseSessionModel session,
+  }) async {
+    try {
+      final currentState = await getAllSessions();
+      final entry = MultiSessionEntryModel.fromCoinbase(
+        walletId: walletId,
+        session: session,
+      );
+      final updatedState = currentState.addSession(entry);
+      await _saveState(updatedState);
+    } catch (e) {
+      throw StorageException(
+        message: 'Failed to save Coinbase session',
         originalException: e,
       );
     }

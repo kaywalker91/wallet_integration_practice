@@ -1,4 +1,5 @@
 import 'package:wallet_integration_practice/core/constants/chain_constants.dart';
+import 'package:wallet_integration_practice/wallet/models/wallet_reconnection_config.dart';
 
 /// Wallet-specific constants and configurations
 class WalletConstants {
@@ -175,5 +176,29 @@ extension WalletTypeExtension on WalletType {
   /// Can be overridden in the future for Solana-first wallets.
   String? get defaultCluster {
     return null;
+  }
+
+  /// Phase 3.2: Get reconnection configuration for this wallet type.
+  ///
+  /// Different wallets have different relay behavior characteristics:
+  /// - OKX: Aggressive config due to Android background restrictions
+  /// - Trust/Coinbase: Medium config for moderate relay needs
+  /// - MetaMask/Rabby: Lenient config for well-behaved wallets
+  /// - Others: Standard config
+  WalletReconnectionConfig get reconnectionConfig {
+    switch (this) {
+      case WalletType.okxWallet:
+        return WalletReconnectionConfig.aggressive();
+      case WalletType.trustWallet:
+      case WalletType.coinbase:
+        return WalletReconnectionConfig.medium();
+      case WalletType.metamask:
+      case WalletType.rabby:
+        return WalletReconnectionConfig.lenient();
+      case WalletType.walletConnect:
+      case WalletType.rainbow:
+      case WalletType.phantom:
+        return WalletReconnectionConfig.standard();
+    }
   }
 }

@@ -75,4 +75,43 @@ class AppConstants {
 
   /// Soft timeout 후 복구 대기 시간
   static const Duration postSoftTimeoutRecoveryWindow = Duration(seconds: 30);
+
+  // ============================================================
+  // Session Persistence Feature Flags
+  // ============================================================
+
+  /// Enable WalletConnect session topic format validation.
+  /// When enabled, validates that session topics are 64-char hex strings.
+  static const bool enableTopicFormatValidation = true;
+
+  /// Enable fallback session search by address when topic lookup fails.
+  /// When enabled, if a session topic is not found, searches by wallet address.
+  static const bool enableSessionAddressFallback = true;
+
+  /// Enable persistence retry queue for failed session save operations.
+  /// When enabled, failed persistence operations are retried with exponential backoff.
+  static const bool enablePersistenceRetryQueue = true;
+
+  /// Enable strict session validation (requires relay connection).
+  /// When false, uses lenient mode that allows offline validation.
+  /// Recommended: Start with false, enable after monitoring.
+  static const bool enableStrictSessionValidation = false;
+
+  /// Enable Phantom encryption key validation during session restore.
+  /// When enabled, validates dApp and Phantom keys before accepting restored session.
+  static const bool enablePhantomKeyValidation = true;
+
+  /// Session validation timeout for relay connectivity check.
+  static const Duration sessionValidationTimeout = Duration(seconds: 5);
+
+  /// Maximum retries for persistence operations.
+  static const int maxPersistenceRetries = 3;
+
+  /// Retry interval for persistence operations.
+  static const Duration persistenceRetryInterval = Duration(seconds: 5);
+
+  /// Enable generalized reconnection configuration.
+  /// When true, uses WalletReconnectionConfig for all wallets.
+  /// When false, uses legacy OKX-specific constants.
+  static const bool enableGeneralizedReconnectionConfig = true;
 }

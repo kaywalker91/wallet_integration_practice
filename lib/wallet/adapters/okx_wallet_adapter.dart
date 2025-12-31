@@ -905,7 +905,7 @@ class OkxWalletAdapter extends WalletConnectAdapter {
   /// 2. Reject if name clearly belongs to another wallet
   /// 3. Accept unknown/empty names (benefit of the doubt for new sessions)
   @override
-  bool isSessionValid(SessionData session) {
+  bool validateWalletSpecific(SessionData session) {
     final peer = session.peer;
     final name = peer.metadata.name.toLowerCase();
     final redirect = peer.metadata.redirect?.native?.toLowerCase() ?? '';
@@ -1138,14 +1138,24 @@ class OkxWalletAdapter extends WalletConnectAdapter {
   Future<WalletEntity?> _attemptSessionRecovery() async {
     AppLogger.wallet('=== OKX Session Recovery START ===');
 
+    // Phase 3.3: Use generalized reconnection config when enabled
+    final config = AppConstants.enableGeneralizedReconnectionConfig
+        ? walletType.reconnectionConfig
+        : null;
+
     // Step 1: Pre-poll delay to allow any pending relay events to arrive
-    await Future.delayed(AppConstants.okxPrePollDelay);
+    final prePollDelay = config?.prePollDelay ?? AppConstants.okxPrePollDelay;
+    await Future.delayed(prePollDelay);
 
     // Step 2: Progressive relay reconnection attempts
-    for (int i = 0; i < AppConstants.okxReconnectTimeouts.length; i++) {
-      final timeoutSeconds = AppConstants.okxReconnectTimeouts[i];
-      AppLogger.wallet('Recovery attempt ${i + 1}/${AppConstants.okxReconnectTimeouts.length}', data: {
+    final reconnectTimeouts = config?.reconnectTimeouts ?? AppConstants.okxReconnectTimeouts;
+    final reconnectDelay = config?.reconnectDelay ?? AppConstants.okxReconnectDelay;
+
+    for (int i = 0; i < reconnectTimeouts.length; i++) {
+      final timeoutSeconds = reconnectTimeouts[i];
+      AppLogger.wallet('Recovery attempt ${i + 1}/${reconnectTimeouts.length}', data: {
         'timeout': '${timeoutSeconds}s',
+        'usingGeneralizedConfig': config != null,
       });
 
       final relayConnected = await ensureRelayConnected(
@@ -1166,23 +1176,26 @@ class OkxWalletAdapter extends WalletConnectAdapter {
       }
 
       // Delay before next attempt (except on last iteration)
-      if (i < AppConstants.okxReconnectTimeouts.length - 1) {
-        await Future.delayed(AppConstants.okxReconnectDelay);
+      if (i < reconnectTimeouts.length - 1) {
+        await Future.delayed(reconnectDelay);
       }
     }
 
     // Step 3: Final session polling without relay (optimistic check)
     // Even if relay failed, session might exist in storage
+    final maxPolls = config?.maxSessionPolls ?? AppConstants.okxMaxSessionPolls;
+    final pollInterval = config?.sessionPollInterval ?? AppConstants.okxSessionPollInterval;
+
     AppLogger.wallet('Final optimistic session check without relay...');
-    for (int poll = 0; poll < AppConstants.okxMaxSessionPolls; poll++) {
+    for (int poll = 0; poll < maxPolls; poll++) {
       final wallet = await _checkForEstablishedSession();
       if (wallet != null) {
         AppLogger.wallet('=== Session found without relay! ===');
         return wallet;
       }
 
-      if (poll < AppConstants.okxMaxSessionPolls - 1) {
-        await Future.delayed(AppConstants.okxSessionPollInterval);
+      if (poll < maxPolls - 1) {
+        await Future.delayed(pollInterval);
       }
     }
 

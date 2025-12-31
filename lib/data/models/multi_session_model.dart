@@ -1,6 +1,8 @@
 import 'package:wallet_integration_practice/core/utils/logger.dart';
+import 'package:wallet_integration_practice/data/models/coinbase_session_model.dart';
 import 'package:wallet_integration_practice/data/models/persisted_session_model.dart';
 import 'package:wallet_integration_practice/data/models/phantom_session_model.dart';
+import 'package:wallet_integration_practice/domain/entities/coinbase_session.dart';
 import 'package:wallet_integration_practice/domain/entities/multi_session_state.dart';
 import 'package:wallet_integration_practice/domain/entities/persisted_session.dart';
 import 'package:wallet_integration_practice/domain/entities/phantom_session.dart';
@@ -12,6 +14,7 @@ class MultiSessionEntryModel {
     required this.sessionType,
     this.walletConnectSession,
     this.phantomSession,
+    this.coinbaseSession,
     required this.createdAt,
     required this.lastUsedAt,
   });
@@ -23,6 +26,7 @@ class MultiSessionEntryModel {
 
     PersistedSessionModel? walletConnectSession;
     PhantomSessionModel? phantomSession;
+    CoinbaseSessionModel? coinbaseSession;
 
     if (sessionType == SessionType.walletConnect &&
         json['walletConnectSession'] != null) {
@@ -37,11 +41,18 @@ class MultiSessionEntryModel {
       );
     }
 
+    if (sessionType == SessionType.coinbase && json['coinbaseSession'] != null) {
+      coinbaseSession = CoinbaseSessionModel.fromJson(
+        json['coinbaseSession'] as Map<String, dynamic>,
+      );
+    }
+
     return MultiSessionEntryModel(
       walletId: json['walletId'] as String,
       sessionType: sessionType,
       walletConnectSession: walletConnectSession,
       phantomSession: phantomSession,
+      coinbaseSession: coinbaseSession,
       createdAt: DateTime.parse(json['createdAt'] as String),
       lastUsedAt: DateTime.parse(json['lastUsedAt'] as String),
     );
@@ -57,6 +68,9 @@ class MultiSessionEntryModel {
           : null,
       phantomSession: entity.phantomSession != null
           ? PhantomSessionModel.fromEntity(entity.phantomSession!)
+          : null,
+      coinbaseSession: entity.coinbaseSession != null
+          ? CoinbaseSessionModel.fromEntity(entity.coinbaseSession!)
           : null,
       createdAt: entity.createdAt,
       lastUsedAt: entity.lastUsedAt,
@@ -91,10 +105,25 @@ class MultiSessionEntryModel {
     );
   }
 
+  /// Create for Coinbase session
+  factory MultiSessionEntryModel.fromCoinbase({
+    required String walletId,
+    required CoinbaseSessionModel session,
+  }) {
+    return MultiSessionEntryModel(
+      walletId: walletId,
+      sessionType: SessionType.coinbase,
+      coinbaseSession: session,
+      createdAt: session.createdAt,
+      lastUsedAt: session.lastUsedAt,
+    );
+  }
+
   final String walletId;
   final SessionType sessionType;
   final PersistedSessionModel? walletConnectSession;
   final PhantomSessionModel? phantomSession;
+  final CoinbaseSessionModel? coinbaseSession;
   final DateTime createdAt;
   final DateTime lastUsedAt;
 
@@ -106,6 +135,7 @@ class MultiSessionEntryModel {
       if (walletConnectSession != null)
         'walletConnectSession': walletConnectSession!.toJson(),
       if (phantomSession != null) 'phantomSession': phantomSession!.toJson(),
+      if (coinbaseSession != null) 'coinbaseSession': coinbaseSession!.toJson(),
       'createdAt': createdAt.toIso8601String(),
       'lastUsedAt': lastUsedAt.toIso8601String(),
     };
@@ -118,6 +148,7 @@ class MultiSessionEntryModel {
       sessionType: sessionType,
       walletConnectSession: walletConnectSession?.toEntity(),
       phantomSession: phantomSession?.toEntity(),
+      coinbaseSession: coinbaseSession?.toEntity(),
       createdAt: createdAt,
       lastUsedAt: lastUsedAt,
     );
@@ -129,6 +160,9 @@ class MultiSessionEntryModel {
   /// Get the underlying PhantomSession entity
   PhantomSession? get phantomSessionEntity => phantomSession?.toEntity();
 
+  /// Get the underlying CoinbaseSession entity
+  CoinbaseSession? get coinbaseSessionEntity => coinbaseSession?.toEntity();
+
   /// Create a copy with updated last used timestamp
   MultiSessionEntryModel copyWithLastUsed(DateTime lastUsedAt) {
     return MultiSessionEntryModel(
@@ -136,6 +170,7 @@ class MultiSessionEntryModel {
       sessionType: sessionType,
       walletConnectSession: walletConnectSession,
       phantomSession: phantomSession?.copyWithLastUsed(lastUsedAt),
+      coinbaseSession: coinbaseSession?.copyWithLastUsed(lastUsedAt),
       createdAt: createdAt,
       lastUsedAt: lastUsedAt,
     );

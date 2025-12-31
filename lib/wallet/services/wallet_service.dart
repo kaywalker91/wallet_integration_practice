@@ -383,12 +383,15 @@ class WalletService {
   Future<WalletEntity?> restoreSession({
     required String sessionTopic,
     required WalletType walletType,
+    String? fallbackAddress,
   }) async {
     AppLogger.wallet('WalletService: Restoring session', data: {
       'walletType': walletType.name,
       'sessionTopicPreview': sessionTopic.length > 10
           ? '${sessionTopic.substring(0, 10)}...'
           : sessionTopic,
+      if (fallbackAddress != null)
+        'fallbackAddress': '${fallbackAddress.substring(0, 10)}...',
     });
 
     try {
@@ -403,8 +406,11 @@ class WalletService {
         return null;
       }
 
-      // Attempt to restore the session by topic
-      final wallet = await adapter.restoreSessionByTopic(sessionTopic);
+      // Attempt to restore the session by topic (with address fallback)
+      final wallet = await adapter.restoreSessionByTopic(
+        sessionTopic,
+        fallbackAddress: fallbackAddress,
+      );
 
       if (wallet != null) {
         _connectedWallet = wallet;

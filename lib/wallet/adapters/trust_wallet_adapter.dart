@@ -154,7 +154,7 @@ class TrustWalletAdapter extends WalletConnectAdapter {
   /// 3. Reject if name clearly belongs to another wallet
   /// 4. Accept unknown/empty names (benefit of the doubt for new sessions)
   @override
-  bool isSessionValid(SessionData session) {
+  bool validateWalletSpecific(SessionData session) {
     final peer = session.peer;
     final name = peer.metadata.name.toLowerCase();
     final redirect = peer.metadata.redirect?.native?.toLowerCase() ?? '';
