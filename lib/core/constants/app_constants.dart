@@ -61,7 +61,8 @@ class AppConstants {
   /// OKX Wallet용 relay 전파 마진 딜레이
   /// prepareConnection() 반환 후에도 네트워크 지연을 고려한 버퍼
   /// 지갑 앱이 relay에서 session proposal을 조회하기 전 충분한 전파 시간 확보
-  static const Duration okxRelayPropagationDelay = Duration(milliseconds: 300);
+  /// 600ms → 1500ms로 증가하여 첫 연결 시 race condition 방지
+  static const Duration okxRelayPropagationDelay = Duration(milliseconds: 1500);
 
   // Soft Timeout 설정
   // - 백그라운드에서 발생한 타임아웃은 "soft timeout"으로 처리

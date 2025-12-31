@@ -11,6 +11,10 @@ class PersistedSession extends Equatable {
     required this.createdAt,
     required this.lastUsedAt,
     this.expiresAt,
+    this.serializedSessionData,
+    this.pairingTopic,
+    this.peerName,
+    this.peerIconUrl,
   });
 
   /// Wallet type name (e.g., 'walletConnect', 'metaMask', 'phantom')
@@ -36,6 +40,18 @@ class PersistedSession extends Equatable {
 
   /// Session expiration timestamp
   final DateTime? expiresAt;
+
+  /// Serialized SDK session data for re-injection (JSON string)
+  final String? serializedSessionData;
+
+  /// Pairing topic for session re-establishment
+  final String? pairingTopic;
+
+  /// Wallet peer name (from SDK metadata)
+  final String? peerName;
+
+  /// Wallet peer icon URL (from SDK metadata)
+  final String? peerIconUrl;
 
   /// Session validity duration (7 days)
   static const Duration defaultSessionDuration = Duration(days: 7);
@@ -73,6 +89,10 @@ class PersistedSession extends Equatable {
     DateTime? createdAt,
     DateTime? lastUsedAt,
     DateTime? expiresAt,
+    String? serializedSessionData,
+    String? pairingTopic,
+    String? peerName,
+    String? peerIconUrl,
   }) {
     return PersistedSession(
       walletType: walletType ?? this.walletType,
@@ -83,6 +103,10 @@ class PersistedSession extends Equatable {
       createdAt: createdAt ?? this.createdAt,
       lastUsedAt: lastUsedAt ?? this.lastUsedAt,
       expiresAt: expiresAt ?? this.expiresAt,
+      serializedSessionData: serializedSessionData ?? this.serializedSessionData,
+      pairingTopic: pairingTopic ?? this.pairingTopic,
+      peerName: peerName ?? this.peerName,
+      peerIconUrl: peerIconUrl ?? this.peerIconUrl,
     );
   }
 
@@ -101,5 +125,9 @@ class PersistedSession extends Equatable {
         createdAt,
         lastUsedAt,
         expiresAt,
+        serializedSessionData,
+        pairingTopic,
+        peerName,
+        peerIconUrl,
       ];
 }

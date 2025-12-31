@@ -683,6 +683,10 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
     // Initialize wallet service (also registers deep link handlers)
     await _walletService.initialize();
 
+    // Register session deletion callback for real-time SDK synchronization
+    // This ensures local storage stays in sync when SDK deletes sessions
+    _registerSessionDeletionHandler();
+
     // Migrate legacy single-session data to multi-session format
     // With timeout to prevent indefinite hanging
     // Skip restoration if offline (will retry when connectivity restored)
@@ -834,6 +838,10 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
       if (expiredCount > 0) {
         AppLogger.wallet('Removed expired sessions', data: {'count': expiredCount});
       }
+
+      // 2.5 Clean up orphan sessions (topics in app storage but not in SDK)
+      // This prevents wasteful restoration attempts on sessions that can't be restored
+      await _cleanupOrphanSessions();
 
       // 3. Get all valid sessions
       final sessionState = await _multiSessionDataSource.getAllSessions();
@@ -1052,12 +1060,20 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
   }
 
   /// Restore a WalletConnect-based session from entry
-  /// Includes retry logic with exponential backoff and jitter
+  /// Uses SessionRestoreResult to detect orphan sessions and handle them appropriately
   Future<WalletEntity?> _restoreWalletConnectSession(dynamic entry) async {
+    AppLogger.wallet('_restoreWalletConnectSession called', data: {
+      'walletId': entry.walletId,
+      'sessionType': entry.sessionType.toString(),
+    });
+
     final wcSession = entry.walletConnectSession;
-    if (wcSession == null) return null;
+    if (wcSession == null) {
+      return null;
+    }
 
     final persistedSession = wcSession.toEntity();
+
     if (persistedSession.isExpired) {
       AppLogger.wallet('WalletConnect session expired', data: {
         'walletId': entry.walletId,
@@ -1075,56 +1091,237 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
       'address': persistedSession.address,
     });
 
-    // Use exponential backoff with jitter for retry logic
-    final backoff = ExponentialBackoff(
-      initialDelay: const Duration(milliseconds: 500),
-      maxDelay: const Duration(seconds: 5),
-      multiplier: 2.0,
-      jitterFactor: 0.2,
-      maxRetries: 3,
+    // First attempt: use restoreSessionWithResult to get detailed status
+    final result = await _walletService.restoreSessionWithResult(
+      sessionTopic: persistedSession.sessionTopic,
+      walletType: walletType,
+      fallbackAddress: persistedSession.address,
     );
 
-    while (backoff.hasMoreRetries) {
-      // Attempt restoration via WalletService
-      // Pass address as fallback for session lookup when topic changes
-      final wallet = await _walletService.restoreSession(
-        sessionTopic: persistedSession.sessionTopic,
-        walletType: walletType,
-        fallbackAddress: persistedSession.address,
-      );
+    // === CRITICAL: Handle orphan sessions immediately (no retry) ===
+    if (result.isOrphanSession) {
+      AppLogger.wallet('ORPHAN SESSION - removing from storage immediately', data: {
+        'walletId': entry.walletId,
+        'walletType': walletType.name,
+        'message': result.message,
+      });
+      // Remove from local storage - this session no longer exists in SDK
+      await _multiSessionDataSource.removeSession(entry.walletId);
+      return null;
+    }
 
-      if (wallet != null) {
-        // Update last used timestamp
-        await _multiSessionDataSource.updateSessionLastUsed(entry.walletId);
-        AppLogger.wallet('WalletConnect session restored', data: {
-          'address': wallet.address,
-          'attempt': backoff.currentRetry + 1,
+    // Handle successful restoration
+    if (result.isSuccess && result.wallet != null) {
+      // Update last used timestamp
+      await _multiSessionDataSource.updateSessionLastUsed(entry.walletId);
+
+      // If topic changed (found via fallback), update stored topic
+      if (result.topicChanged && result.newTopic != null) {
+        AppLogger.wallet('Session topic changed - updating stored topic', data: {
+          'walletId': entry.walletId,
+          'newTopic': '${result.newTopic!.substring(0, 10)}...',
         });
-        return wallet;
+        // Create updated session model with new topic
+        final updatedSession = PersistedSessionModel(
+          sessionTopic: result.newTopic!,
+          address: persistedSession.address,
+          chainId: persistedSession.chainId,
+          cluster: persistedSession.cluster,
+          walletType: persistedSession.walletType,
+          createdAt: persistedSession.createdAt,
+          lastUsedAt: DateTime.now(),
+          expiresAt: persistedSession.expiresAt,
+        );
+        await _multiSessionDataSource.saveWalletConnectSession(
+          walletId: entry.walletId,
+          session: updatedSession,
+        );
       }
 
-      // If more retries available, wait with exponential backoff
-      if (backoff.hasMoreRetries) {
+      AppLogger.wallet('WalletConnect session restored', data: {
+        'address': result.wallet!.address,
+      });
+      return result.wallet;
+    }
+
+    // Only retry for relay disconnection (temporary network issues)
+    if (result.shouldRetry) {
+      AppLogger.wallet('Relay disconnection - retrying with backoff', data: {
+        'status': result.status.name,
+      });
+
+      // Use exponential backoff with jitter for retry logic
+      final backoff = ExponentialBackoff(
+        initialDelay: const Duration(milliseconds: 500),
+        maxDelay: const Duration(seconds: 5),
+        multiplier: 2.0,
+        jitterFactor: 0.2,
+        maxRetries: 2, // Reduced from 3 since we already tried once
+      );
+
+      while (backoff.hasMoreRetries) {
+        final retryResult = await _walletService.restoreSessionWithResult(
+          sessionTopic: persistedSession.sessionTopic,
+          walletType: walletType,
+          fallbackAddress: persistedSession.address,
+        );
+
+        // Check for orphan on retry (SDK state may have changed)
+        if (retryResult.isOrphanSession) {
+          AppLogger.wallet('Session became orphan during retry', data: {
+            'walletId': entry.walletId,
+          });
+          await _multiSessionDataSource.removeSession(entry.walletId);
+          return null;
+        }
+
+        if (retryResult.isSuccess && retryResult.wallet != null) {
+          await _multiSessionDataSource.updateSessionLastUsed(entry.walletId);
+          AppLogger.wallet('WalletConnect session restored on retry', data: {
+            'address': retryResult.wallet!.address,
+            'attempt': backoff.currentRetry + 1,
+          });
+          return retryResult.wallet;
+        }
+
+        // Don't retry for non-relay issues
+        if (!retryResult.shouldRetry) {
+          break;
+        }
+
         final delay = backoff.currentDelay;
-        AppLogger.wallet('Session restoration attempt failed, retrying...', data: {
+        AppLogger.wallet('Session restoration retry', data: {
           'attempt': backoff.currentRetry + 1,
-          'maxRetries': backoff.maxRetries,
           'nextDelayMs': delay.inMilliseconds,
         });
         backoff.incrementRetry();
         await Future.delayed(delay);
-      } else {
-        break;
       }
     }
 
-    AppLogger.wallet('WalletConnect session restoration failed after retries', data: {
+    AppLogger.wallet('WalletConnect session restoration failed', data: {
       'walletType': persistedSession.walletType,
       'address': persistedSession.address,
-      'attempts': backoff.maxRetries,
+      'finalStatus': result.status.name,
     });
 
     return null;
+  }
+
+  /// Pre-restoration cleanup: Remove orphan sessions before attempting restoration
+  ///
+  /// Orphan sessions occur when the app's local storage has session topics
+  /// that no longer exist in the WalletConnect SDK. This happens when:
+  /// - A new wallet connection replaces existing sessions in the SDK
+  /// - Sessions expire on the SDK side but app storage isn't updated
+  /// - SDK state is cleared but app storage persists
+  ///
+  /// By cleaning up orphans before restoration, we avoid:
+  /// - Wasteful retry attempts on sessions that can never be restored
+  /// - User-facing delays from failed restoration attempts
+  ///
+  /// NOTE: Multi-session support change (2024-01):
+  /// - Sessions NOT in SDK are no longer deleted (SDK only keeps 1 active session)
+  /// - Only EXPIRED sessions are removed
+  /// - This allows multiple wallet sessions to persist across app restarts
+  Future<void> _cleanupOrphanSessions() async {
+    try {
+      final sessionState = await _multiSessionDataSource.getAllSessions();
+      final wcSessions = sessionState.sessionList
+          .where((e) => e.sessionType == SessionType.walletConnect)
+          .toList();
+
+      if (wcSessions.isEmpty) {
+        AppLogger.wallet('No WalletConnect sessions to check');
+        return;
+      }
+
+      AppLogger.wallet('Checking WalletConnect sessions for expiration', data: {
+        'wcSessionCount': wcSessions.length,
+      });
+
+      // Only remove expired sessions - keep sessions even if not in SDK
+      // (SDK only maintains single active session, but we want multi-session support)
+      int expiredCount = 0;
+      int staleCount = 0;
+
+      // Get SDK topics for informational logging only
+      final sdkTopics = await _walletService.getActiveSdkTopics();
+
+      for (final entry in wcSessions) {
+        final session = entry.walletConnectSession;
+        if (session == null) continue;
+
+        final storedTopic = session.toEntity().sessionTopic;
+        final isInSdk = sdkTopics.contains(storedTopic);
+
+        // Step 1: Check expiration - remove expired sessions
+        if (session.isExpired) {
+          AppLogger.wallet('Expired session detected - removing', data: {
+            'walletId': entry.walletId,
+            'topicPreview': storedTopic.length > 8
+                ? '${storedTopic.substring(0, 8)}...'
+                : storedTopic,
+            'expiresAt': session.expiresAt?.toIso8601String(),
+          });
+          await _multiSessionDataSource.removeSession(entry.walletId);
+          expiredCount++;
+          continue;
+        }
+
+        // Step 2: Log sessions not in SDK but keep them (stale but valid)
+        if (!isInSdk) {
+          AppLogger.wallet('Session not in SDK but not expired - keeping as stale', data: {
+            'walletId': entry.walletId,
+            'walletType': session.walletType,
+            'topicPreview': storedTopic.length > 8
+                ? '${storedTopic.substring(0, 8)}...'
+                : storedTopic,
+          });
+          staleCount++;
+        }
+      }
+
+      AppLogger.wallet('Session cleanup complete', data: {
+        'expiredRemoved': expiredCount,
+        'staleKept': staleCount,
+        'totalRemaining': wcSessions.length - expiredCount,
+      });
+    } catch (e, st) {
+      // Don't fail restoration if cleanup fails - just log and continue
+      AppLogger.e('Session cleanup failed', e, st);
+    }
+  }
+
+  /// Register session deletion callback for real-time sync
+  ///
+  /// This ensures that when SDK deletes sessions (e.g., when connecting a new wallet),
+  /// the app's local storage is updated immediately.
+  void _registerSessionDeletionHandler() {
+    _walletService.registerSessionDeletedCallback((String topic) async {
+      AppLogger.wallet('Session deleted by SDK - syncing local storage', data: {
+        'deletedTopic': '${topic.substring(0, 8)}...',
+      });
+
+      try {
+        // Find and remove the session with this topic
+        final sessionState = await _multiSessionDataSource.getAllSessions();
+        for (final entry in sessionState.sessionList) {
+          if (entry.sessionType == SessionType.walletConnect) {
+            final storedTopic = entry.walletConnectSession?.toEntity().sessionTopic;
+            if (storedTopic == topic) {
+              AppLogger.wallet('Removing deleted session from local storage', data: {
+                'walletId': entry.walletId,
+              });
+              await _multiSessionDataSource.removeSession(entry.walletId);
+              break;
+            }
+          }
+        }
+      } catch (e, st) {
+        AppLogger.e('Failed to sync deleted session', e, st);
+      }
+    });
   }
 
   /// Restore a Phantom session from entry

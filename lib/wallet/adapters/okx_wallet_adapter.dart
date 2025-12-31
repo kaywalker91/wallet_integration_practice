@@ -143,6 +143,14 @@ class OkxWalletAdapter extends WalletConnectAdapter {
     // Mark that deep link is being processed (for grace period logic)
     _deepLinkPending = true;
 
+    // Guard: Skip if lifecycle callback is already checking session (race condition prevention)
+    if (isCheckingSession) {
+      AppLogger.wallet(
+          'OKX callback: session check in progress by lifecycle, skipping');
+      _deepLinkPending = false;
+      return;
+    }
+
     // Guard: Skip if already connected (prevents infinite loop)
     if (isConnected) {
       AppLogger.wallet('OKX callback ignored: already connected');
@@ -199,6 +207,14 @@ class OkxWalletAdapter extends WalletConnectAdapter {
     // Mark that deep link is being processed (for grace period logic)
     _deepLinkPending = true;
 
+    // Guard: Skip if lifecycle callback is already checking session (race condition prevention)
+    if (isCheckingSession) {
+      AppLogger.wallet(
+          'App resumed: session check in progress by lifecycle, skipping');
+      _deepLinkPending = false;
+      return;
+    }
+
     // Guard: Skip if already connected (prevents infinite loop)
     if (isConnected) {
       AppLogger.wallet('App resumed callback ignored: already connected');
@@ -229,11 +245,27 @@ class OkxWalletAdapter extends WalletConnectAdapter {
         return;
       }
 
-      // Fall back to relay-based check with delay
-      await Future.delayed(const Duration(milliseconds: 300));
+      // For new connections, use extended grace period since relay may need more time
+      // to propagate the session. For session restoration, use shorter delay.
+      if (isNewConnection) {
+        AppLogger.wallet(
+            'Empty callback during new connection - extended grace period');
+        await Future.delayed(const Duration(milliseconds: 1200));
 
-      // Directly call the protected method instead of lifecycle callback
-      await checkConnectionOnResume();
+        // If still not connected after extended delay, delegate to connect() timeout
+        // rather than triggering multiple retries that cause race conditions
+        if (!isConnected) {
+          AppLogger.wallet(
+              'Session not yet established, delegating to connect timeout');
+          return;
+        }
+      } else {
+        // Fall back to relay-based check with delay (session restoration)
+        await Future.delayed(const Duration(milliseconds: 300));
+
+        // Directly call the protected method instead of lifecycle callback
+        await checkConnectionOnResume();
+      }
     } finally {
       _isProcessingCallback = false;
       _deepLinkPending = false;

@@ -168,7 +168,7 @@ class MultiSessionEntryModel {
     return MultiSessionEntryModel(
       walletId: walletId,
       sessionType: sessionType,
-      walletConnectSession: walletConnectSession,
+      walletConnectSession: walletConnectSession?.copyWithLastUsed(lastUsedAt),
       phantomSession: phantomSession?.copyWithLastUsed(lastUsedAt),
       coinbaseSession: coinbaseSession?.copyWithLastUsed(lastUsedAt),
       createdAt: createdAt,

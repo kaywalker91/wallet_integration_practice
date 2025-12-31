@@ -8,6 +8,7 @@ import 'package:wallet_integration_practice/wallet/adapters/base_wallet_adapter.
 import 'package:wallet_integration_practice/wallet/adapters/walletconnect_adapter.dart';
 import 'package:wallet_integration_practice/wallet/adapters/phantom_adapter.dart';
 import 'package:wallet_integration_practice/wallet/models/wallet_adapter_config.dart';
+import 'package:wallet_integration_practice/wallet/models/session_restore_result.dart';
 import 'package:wallet_integration_practice/wallet/services/wallet_adapter_factory.dart';
 
 /// Wallet service that manages different wallet adapters.
@@ -436,6 +437,124 @@ class WalletService {
     } catch (e, st) {
       AppLogger.e('WalletService: Session restoration error', e, st);
       return null;
+    }
+  }
+
+  /// Restore a persisted session with detailed result information
+  ///
+  /// Returns [SessionRestoreResult] with detailed status:
+  /// - [SessionRestoreStatus.success]: Session restored successfully
+  /// - [SessionRestoreStatus.topicNotFound]: Orphan session (should be removed)
+  /// - [SessionRestoreStatus.relayDisconnected]: Retry may help
+  /// - Other statuses indicate various failure modes
+  Future<SessionRestoreResult> restoreSessionWithResult({
+    required String sessionTopic,
+    required WalletType walletType,
+    String? fallbackAddress,
+  }) async {
+    AppLogger.wallet('WalletService: Restoring session with result', data: {
+      'walletType': walletType.name,
+      'sessionTopicPreview': sessionTopic.length > 10
+          ? '${sessionTopic.substring(0, 10)}...'
+          : sessionTopic,
+      if (fallbackAddress != null)
+        'fallbackAddress': '${fallbackAddress.substring(0, 10)}...',
+    });
+
+    try {
+      // Initialize the adapter
+      final adapter = await initializeAdapter(walletType);
+
+      // Only WalletConnect-based adapters support session restoration
+      if (adapter is! WalletConnectAdapter) {
+        AppLogger.wallet('Adapter does not support session restoration', data: {
+          'walletType': walletType.name,
+        });
+        return SessionRestoreResult.appKitNotReady(
+          'Adapter does not support session restoration',
+        );
+      }
+
+      // Get detailed restoration result
+      final result = await adapter.restoreSessionByTopicWithResult(
+        sessionTopic,
+        fallbackAddress: fallbackAddress,
+      );
+
+      if (result.isSuccess && result.wallet != null) {
+        _connectedWallet = result.wallet;
+        _connectionController.add(WalletConnectionStatus.connected(result.wallet!));
+
+        // Emit initial session accounts if available
+        final accounts = adapter.sessionAccounts;
+        if (accounts.isNotEmpty) {
+          _accountsChangedController.add(accounts);
+        }
+
+        AppLogger.wallet('WalletService: Session restored successfully', data: {
+          'address': result.wallet!.address,
+          'walletType': result.wallet!.type.name,
+          'chainId': result.wallet!.chainId,
+          'topicChanged': result.topicChanged,
+        });
+      } else {
+        AppLogger.wallet('WalletService: Session restoration failed', data: {
+          'status': result.status.name,
+          'message': result.message,
+          'isOrphan': result.isOrphanSession,
+        });
+      }
+
+      return result;
+    } catch (e, st) {
+      AppLogger.e('WalletService: Session restoration error', e, st);
+      return SessionRestoreResult.appKitNotReady(
+        'Exception during restoration: $e',
+      );
+    }
+  }
+
+  /// Get all active session topics from the WalletConnect SDK
+  ///
+  /// Used for pre-restoration cleanup to identify orphan sessions
+  /// (sessions stored in app but not in SDK).
+  ///
+  /// Returns empty set if SDK is not initialized.
+  Future<Set<String>> getActiveSdkTopics() async {
+    try {
+      // Use WalletConnect type to initialize the adapter
+      final adapter = await initializeAdapter(WalletType.walletConnect);
+
+      if (adapter is! WalletConnectAdapter) {
+        AppLogger.wallet('Adapter is not WalletConnectAdapter');
+        return {};
+      }
+
+      final topics = adapter.getActiveSdkTopics();
+      AppLogger.wallet('Retrieved active SDK topics', data: {
+        'count': topics.length,
+        'topics': topics.map((t) => '${t.substring(0, 8)}...').toList(),
+      });
+
+      return topics;
+    } catch (e, st) {
+      AppLogger.e('Failed to get active SDK topics', e, st);
+      return {};
+    }
+  }
+
+  /// Register a callback for session deletion events
+  ///
+  /// This allows the caller to be notified when a session is deleted
+  /// from the SDK (e.g., by connecting a new wallet that replaces existing sessions).
+  void registerSessionDeletedCallback(SessionDeletedCallback callback) {
+    // Find the WalletConnect adapter and register the callback
+    for (final adapter in _adapters.values) {
+      if (adapter is WalletConnectAdapter) {
+        adapter.onSessionDeleted = callback;
+        AppLogger.wallet('Session deleted callback registered');
+        break;
+      }
     }
   }
 

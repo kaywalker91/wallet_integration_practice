@@ -11,6 +11,10 @@ class PersistedSessionModel {
     required this.createdAt,
     required this.lastUsedAt,
     this.expiresAt,
+    this.serializedSessionData,
+    this.pairingTopic,
+    this.peerName,
+    this.peerIconUrl,
   });
 
   /// Create from JSON
@@ -26,6 +30,10 @@ class PersistedSessionModel {
       expiresAt: json['expiresAt'] != null
           ? DateTime.parse(json['expiresAt'] as String)
           : null,
+      serializedSessionData: json['serializedSessionData'] as String?,
+      pairingTopic: json['pairingTopic'] as String?,
+      peerName: json['peerName'] as String?,
+      peerIconUrl: json['peerIconUrl'] as String?,
     );
   }
 
@@ -40,6 +48,10 @@ class PersistedSessionModel {
       createdAt: entity.createdAt,
       lastUsedAt: entity.lastUsedAt,
       expiresAt: entity.expiresAt,
+      serializedSessionData: entity.serializedSessionData,
+      pairingTopic: entity.pairingTopic,
+      peerName: entity.peerName,
+      peerIconUrl: entity.peerIconUrl,
     );
   }
 
@@ -52,6 +64,24 @@ class PersistedSessionModel {
   final DateTime lastUsedAt;
   final DateTime? expiresAt;
 
+  /// Serialized SDK session data for re-injection (JSON string)
+  final String? serializedSessionData;
+
+  /// Pairing topic for session re-establishment
+  final String? pairingTopic;
+
+  /// Wallet peer name (from SDK metadata)
+  final String? peerName;
+
+  /// Wallet peer icon URL (from SDK metadata)
+  final String? peerIconUrl;
+
+  /// Check if session is expired
+  bool get isExpired {
+    if (expiresAt == null) return false;
+    return DateTime.now().isAfter(expiresAt!);
+  }
+
   /// Convert to JSON
   Map<String, dynamic> toJson() {
     return {
@@ -63,6 +93,10 @@ class PersistedSessionModel {
       'createdAt': createdAt.toIso8601String(),
       'lastUsedAt': lastUsedAt.toIso8601String(),
       'expiresAt': expiresAt?.toIso8601String(),
+      'serializedSessionData': serializedSessionData,
+      'pairingTopic': pairingTopic,
+      'peerName': peerName,
+      'peerIconUrl': peerIconUrl,
     };
   }
 
@@ -77,6 +111,28 @@ class PersistedSessionModel {
       createdAt: createdAt,
       lastUsedAt: lastUsedAt,
       expiresAt: expiresAt,
+      serializedSessionData: serializedSessionData,
+      pairingTopic: pairingTopic,
+      peerName: peerName,
+      peerIconUrl: peerIconUrl,
+    );
+  }
+
+  /// Create a copy with updated last used timestamp
+  PersistedSessionModel copyWithLastUsed(DateTime lastUsedAt) {
+    return PersistedSessionModel(
+      walletType: walletType,
+      sessionTopic: sessionTopic,
+      address: address,
+      chainId: chainId,
+      cluster: cluster,
+      createdAt: createdAt,
+      lastUsedAt: lastUsedAt,
+      expiresAt: expiresAt,
+      serializedSessionData: serializedSessionData,
+      pairingTopic: pairingTopic,
+      peerName: peerName,
+      peerIconUrl: peerIconUrl,
     );
   }
 }

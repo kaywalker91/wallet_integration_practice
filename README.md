@@ -18,6 +18,32 @@ iLity Hub를 위한 지갑 연동 실습
 
 ## 최근 변경 사항
 
+### 2025-12-31: WalletConnect 세션 레지스트리 및 멀티 세션 아키텍처 강화
+
+**기능**: 여러 WalletConnect 세션을 중앙에서 체계적으로 관리하기 위한 `WalletConnectSessionRegistry` 도입 및 관련 데이터 모델/어댑터 리팩토링.
+
+**주요 개선 사항**:
+1.  **WalletConnectSessionRegistry 도입**:
+    *   다중 세션의 생명주기(Active, Inactive, Stale, Expired)를 중앙에서 관리하는 전용 레지스트리 구현.
+    *   세션 전환(Switching), 검증(Validation), 만료 정리(Cleanup) 로직 통합.
+    *   메모리 내 세션 캐싱 및 SDK 상태와의 동기화 지원.
+2.  **데이터 모델 고도화**:
+    *   `PersistedSession`: `pairingTopic`, `peerName`, `peerIconUrl` 등 메타데이터 필드 추가로 UI 표현력 강화.
+    *   `MultiSessionModel` & `PersistedSessionModel`: 직렬화/역직렬화 로직 개선 및 새로운 필드 지원.
+3.  **어댑터 리팩토링**:
+    *   `WalletConnectAdapter`, `TrustWalletAdapter`, `OKXWalletAdapter`: 새로운 세션 모델 및 레지스트리 구조에 맞춰 연결 및 복원 로직 업데이트.
+    *   지갑 별 세션 분리 및 독립적 상태 관리 강화.
+
+**변경된 파일**:
+- `lib/wallet/services/walletconnect_session_registry.dart` (신규)
+- `lib/wallet/models/session_restore_result.dart` (신규)
+- `lib/domain/entities/persisted_session.dart`: 메타데이터 필드 확장
+- `lib/data/models/persisted_session_model.dart`: 모델 매핑 업데이트
+- `lib/wallet/adapters/walletconnect_adapter.dart`: 레지스트리 연동
+- `lib/wallet/services/wallet_service.dart`: 서비스 레이어 통합
+
+---
+
 ### 2025-12-31: Coinbase 세션 지속성 수정 및 세션 복원 안정화
 
 **기능**: Coinbase 지갑의 세션이 앱 재시작 후에도 유지되지 않던 문제를 해결하고, 세션 복원 아키텍처를 개선했습니다.

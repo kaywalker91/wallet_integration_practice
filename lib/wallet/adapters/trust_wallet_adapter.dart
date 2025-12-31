@@ -265,11 +265,14 @@ class TrustWalletAdapter extends WalletConnectAdapter {
     // Register deep link handlers for callback
     _registerDeepLinkHandlers();
 
-    // CRITICAL: Clear any previous WalletConnect sessions/pairings before connecting.
-    // This prevents issues where stale session data from a previous wallet (e.g., Phantom)
-    // could interfere with the Trust Wallet connection or cause phantom.com redirects.
-    AppLogger.wallet('Trust Wallet: clearing previous sessions before connect');
-    await clearPreviousSessions();
+    // NOTE: Multi-session support (2024-01)
+    // Previously we cleared all sessions before connecting, which prevented
+    // maintaining multiple wallet sessions simultaneously. Now we keep existing
+    // sessions to support multi-wallet scenarios.
+    //
+    // Old behavior (disabled):
+    // await clearPreviousSessions();
+    AppLogger.wallet('Trust Wallet: preserving existing sessions for multi-wallet support');
 
     try {
       // Step 1: Prepare connection (generates URI without blocking on approval)
