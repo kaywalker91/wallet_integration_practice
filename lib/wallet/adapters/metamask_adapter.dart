@@ -4,6 +4,7 @@ import 'package:reown_appkit/reown_appkit.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wallet_integration_practice/core/core.dart';
+import 'package:wallet_integration_practice/core/services/file_log_service.dart';
 import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
 import 'package:wallet_integration_practice/wallet/adapters/walletconnect_adapter.dart';
 
@@ -404,18 +405,33 @@ class MetaMaskAdapter extends WalletConnectAdapter {
 
   @override
   bool validateWalletSpecific(SessionData session) {
+    final fileLog = FileLogService.instance;
     final name = session.peer.metadata.name.toLowerCase();
     final redirect =
         session.peer.metadata.redirect?.native?.toLowerCase() ?? '';
 
+    // Log validation start with all metadata
+    unawaited(fileLog.logMetaMask('validateWalletSpecific called', {
+      'sessionTopic': session.topic.substring(0, 10),
+      'peerName': name,
+      'redirect': redirect,
+      'peerUrl': session.peer.metadata.url,
+    }));
+
     // Accept if MetaMask identified
     if (name.contains('metamask')) {
+      unawaited(fileLog.logMetaMask('ACCEPTED: peer name contains metamask', {
+        'peerName': name,
+      }));
       AppLogger.wallet('MetaMask session accepted: peer name contains metamask',
           data: {'peerName': name});
       return true;
     }
 
     if (redirect.contains('metamask://') || redirect.contains('metamask:')) {
+      unawaited(fileLog.logMetaMask('ACCEPTED: redirect contains metamask scheme', {
+        'redirect': redirect,
+      }));
       AppLogger.wallet(
           'MetaMask session accepted: redirect contains metamask scheme',
           data: {'redirect': redirect});
@@ -438,15 +454,36 @@ class MetaMaskAdapter extends WalletConnectAdapter {
 
     for (final wallet in otherWallets) {
       if (name.contains(wallet)) {
+        unawaited(fileLog.logMetaMask('REJECTED: belongs to other wallet', {
+          'peerName': name,
+          'matchedWallet': wallet,
+        }));
         AppLogger.wallet('MetaMask session REJECTED: belongs to $wallet',
             data: {'peerName': name, 'wallet': wallet});
         return false;
       }
     }
 
-    // Reject unknown sessions (stricter validation)
-    AppLogger.d('MetaMaskAdapter ignored session for unknown wallet: $name');
-    return false;
+    // Accept unknown sessions (may be MetaMask with different metadata)
+    // This matches OKX/Trust behavior for consistent session restoration
+    if (name.isEmpty) {
+      unawaited(fileLog.logMetaMask('ACCEPTED: empty name (new session)', {
+        'redirect': redirect,
+      }));
+      AppLogger.wallet('MetaMask session ACCEPTED: empty name (new session)',
+          data: {'redirect': redirect});
+      return true;
+    }
+
+    // Default: accept unknown wallet names (benefit of the doubt)
+    unawaited(fileLog.logMetaMask('ACCEPTED: unknown wallet (benefit of doubt)', {
+      'peerName': name,
+      'redirect': redirect,
+    }));
+    AppLogger.wallet(
+        'MetaMask session ACCEPTED: unknown wallet "$name" (benefit of doubt)',
+        data: {'peerName': name, 'redirect': redirect});
+    return true;
   }
 
   @override

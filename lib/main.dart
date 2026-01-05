@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wallet_integration_practice/core/core.dart';
+import 'package:wallet_integration_practice/core/services/file_log_service.dart';
 import 'package:wallet_integration_practice/presentation/presentation.dart';
 
 void main() async {
@@ -46,6 +47,11 @@ Future<void> _initializeApp() async {
 
   // Initialize deep link service
   await DeepLinkService.instance.initialize();
+
+  // Initialize file log service for debugging session restoration
+  await FileLogService.instance.initialize();
+  await FileLogService.instance.logSeparator('APP COLD START');
+  await FileLogService.instance.log('INIT', 'App starting - cold start detected');
 
   // Initialize SharedPreferences for balance caching
   final sharedPreferences = await SharedPreferences.getInstance();

@@ -13,6 +13,7 @@ import 'package:wallet_integration_practice/presentation/widgets/wallet/wallet_s
 import 'package:wallet_integration_practice/presentation/widgets/wallet/connected_wallets_section.dart';
 import 'package:wallet_integration_practice/presentation/widgets/wallet/connected_wallets_skeleton.dart';
 import 'package:wallet_integration_practice/presentation/pages/wallet_connect_modal.dart';
+import 'package:wallet_integration_practice/presentation/screens/debug/debug_log_screen.dart';
 
 /// Main home screen
 class HomeScreen extends ConsumerStatefulWidget {
@@ -30,9 +31,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         title: const Text('Wallet Integration Practice'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.settings),
+            icon: const Icon(Icons.bug_report),
+            tooltip: 'Debug Logs',
             onPressed: () {
-              // Navigate to settings
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const DebugLogScreen(),
+                ),
+              );
             },
           ),
         ],

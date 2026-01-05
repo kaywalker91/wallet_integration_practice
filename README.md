@@ -18,6 +18,36 @@ iLity Hub를 위한 지갑 연동 실습
 
 ## 최근 변경 사항
 
+### 2026-01-05: File-based Logging System & Session Debugging (Part 3)
+
+**기능**: 세션 복원 및 콜드 스타트 이슈를 추적하기 위한 영구 파일 로깅 시스템 및 인앱 디버그 뷰어 도입.
+
+**주요 개선 사항**:
+1.  **File Log Service**:
+    *   앱 재시작 간에도 유지되는 파일 기반 로깅 시스템 구현 (`FileLogService`).
+    *   로그 로테이션(1MB 제한) 및 카테고리별 태깅(RESTORE, SDK, RELAY 등) 지원.
+    *   `path_provider`를 사용하여 안전한 내부 저장소에 로그 파일 관리.
+2.  **In-App Debug Viewer**:
+    *   **DebugLogScreen**: 수집된 로그를 앱 내에서 실시간으로 확인하고 필터링할 수 있는 화면 추가.
+    *   **기능**: 로그 새로고침, 자동 스크롤, 클립보드 복사, 공유(`share_plus`), 로그 초기화 기능 제공.
+    *   **필터링**: 카테고리별(RESTORE, METAMASK, ERROR 등) 필터링으로 문제 원인 파악 용이.
+3.  **심층 세션 추적**:
+    *   **MultiSessionDataSource**: 세션 로드 및 삭제 과정에 상세 로깅 적용.
+    *   **WalletProvider**: 세션 복원 시도, 오판(Orphan) 감지, 재시도 로직 추적.
+    *   **MetaMask/WalletConnect**: 릴레이 연결, 피어 유효성 검사, SDK 내부 상태 변화 추적.
+
+**변경된 파일**:
+- `lib/core/services/file_log_service.dart` (신규)
+- `lib/presentation/screens/debug/debug_log_screen.dart` (신규)
+- `lib/presentation/screens/home/home_screen.dart`: 디버그 버튼 추가
+- `lib/data/datasources/local/multi_session_datasource.dart`: 로깅 적용
+- `lib/presentation/providers/wallet_provider.dart`: 로깅 적용
+- `lib/wallet/adapters/metamask_adapter.dart`: 로깅 적용
+- `lib/wallet/adapters/walletconnect_adapter.dart`: 로깅 적용
+- `pubspec.yaml`: 의존성 추가
+
+---
+
 ### 2026-01-05: WalletConnect Relay State Machine 및 Crypto Isolate 최적화 (Part 2)
 
 **기능**: WalletConnect Relay 연결 상태를 스레드 안전하게 관리하는 State Machine 도입 및 암호화 연산의 Isolate 최적화.

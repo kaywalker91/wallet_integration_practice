@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:wallet_integration_practice/core/constants/app_constants.dart';
 import 'package:wallet_integration_practice/core/errors/exceptions.dart';
+import 'package:wallet_integration_practice/core/services/file_log_service.dart';
 import 'package:wallet_integration_practice/core/utils/logger.dart';
 import 'package:wallet_integration_practice/data/models/multi_session_model.dart';
 import 'package:wallet_integration_practice/data/models/persisted_session_model.dart';
@@ -75,16 +76,47 @@ class MultiSessionDataSourceImpl implements MultiSessionDataSource {
 
   @override
   Future<MultiSessionStateModel> getAllSessions() async {
+    final fileLog = FileLogService.instance;
+    await fileLog.logRestore('getAllSessions() called - loading from storage');
+
     try {
       final json = await _secureStorage.read(key: _multiSessionStorageKey);
       if (json == null) {
+        await fileLog.logRestore('No sessions found in storage (null)');
         return MultiSessionStateModel.empty();
       }
-      return MultiSessionStateModel.fromJson(
+
+      final state = MultiSessionStateModel.fromJson(
         jsonDecode(json) as Map<String, dynamic>,
       );
+
+      // Log each session found
+      await fileLog.logRestore('Sessions loaded from storage', {
+        'totalCount': state.count,
+        'activeWalletId': state.activeWalletId,
+      });
+
+      for (final entry in state.sessionList) {
+        final wcSession = entry.walletConnectSession;
+        final walletType = wcSession?.walletType;
+        final isMetaMask = walletType?.toLowerCase().contains('metamask') ?? false;
+        if (isMetaMask || entry.sessionType == SessionType.walletConnect) {
+          await fileLog.logRestore('Found WalletConnect session', {
+            'walletId': entry.walletId,
+            'walletType': walletType,
+            'sessionType': entry.sessionType.name,
+            'topic': wcSession?.sessionTopic.substring(0, 10) ?? 'null',
+            'address': wcSession?.address.substring(0, 10) ?? 'null',
+            'expiresAt': wcSession?.expiresAt?.toIso8601String() ?? 'null',
+            'isMetaMask': isMetaMask,
+          });
+        }
+      }
+
+      return state;
     } catch (e, st) {
       // Log error but return empty state instead of throwing
+      await fileLog.logError('Failed to get multi-session state', e, st);
       AppLogger.e('Failed to get multi-session state', e, st);
       return MultiSessionStateModel.empty();
     }
@@ -183,11 +215,36 @@ class MultiSessionDataSourceImpl implements MultiSessionDataSource {
 
   @override
   Future<void> removeSession(String walletId) async {
+    final fileLog = FileLogService.instance;
+    await fileLog.logRestore('removeSession() called - DELETING session', {
+      'walletId': walletId,
+      'reason': 'orphan or expired',
+    });
+
     try {
       final currentState = await getAllSessions();
+
+      // Log what we're about to remove
+      final sessionToRemove = currentState.getSession(walletId);
+      if (sessionToRemove != null) {
+        final wcSession = sessionToRemove.walletConnectSession;
+        await fileLog.logRestore('Session being removed', {
+          'walletId': walletId,
+          'walletType': wcSession?.walletType,
+          'sessionType': sessionToRemove.sessionType.name,
+          'topic': wcSession?.sessionTopic.substring(0, 10) ?? 'null',
+        });
+      }
+
       final updatedState = currentState.removeSession(walletId);
       await _saveState(updatedState);
+
+      await fileLog.logRestore('Session removed successfully', {
+        'walletId': walletId,
+        'remainingCount': updatedState.count,
+      });
     } catch (e) {
+      await fileLog.logError('Failed to remove session', e);
       throw StorageException(
         message: 'Failed to remove session: $walletId',
         originalException: e,

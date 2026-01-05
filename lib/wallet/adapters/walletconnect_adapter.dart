@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/widgets.dart';
 import 'package:reown_appkit/reown_appkit.dart';
 import 'package:wallet_integration_practice/core/core.dart';
+import 'package:wallet_integration_practice/core/services/file_log_service.dart';
 import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
 import 'package:wallet_integration_practice/domain/entities/transaction_entity.dart';
 import 'package:wallet_integration_practice/domain/entities/session_account.dart';
@@ -2102,6 +2103,13 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
     String sessionTopic, {
     String? fallbackAddress,
   }) async {
+    final fileLog = FileLogService.instance;
+    await fileLog.logSdk('restoreSessionByTopicWithResult START', {
+      'walletType': walletType.name,
+      'topic': sessionTopic.length > 10 ? '${sessionTopic.substring(0, 10)}...' : sessionTopic,
+      'fallbackAddress': fallbackAddress?.substring(0, 10),
+    });
+
     AppLogger.wallet('restoreSessionByTopicWithResult called', data: {
       'topic': TopicValidator.maskForLogging(sessionTopic),
       'fallbackAddress': fallbackAddress?.substring(0, 10),
@@ -2109,6 +2117,7 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
     });
 
     if (_appKit == null) {
+      await fileLog.logSdk('AppKit is NULL - not initialized');
       AppLogger.wallet('restoreSessionByTopic: AppKit not initialized');
       return SessionRestoreResult.appKitNotReady(
         'AppKit not initialized',
@@ -2135,12 +2144,16 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
     });
 
     // Use retry logic for relay connection (cold start may need multiple attempts)
+    await fileLog.logRelay('Attempting relay connection (3 attempts, 5s initial timeout)');
     final relayConnected = await _waitForRelayWithRetry(
       maxAttempts: 3,
       initialTimeout: const Duration(seconds: 5),
     );
 
+    await fileLog.logRelay('Relay connection result', {'connected': relayConnected});
+
     if (!relayConnected) {
+      await fileLog.logRelay('RELAY FAILED - session restoration aborted');
       AppLogger.wallet('restoreSessionByTopic: Relay not connected after retries');
       return SessionRestoreResult.relayDisconnected(
         'Relay not connected after retries',
@@ -2153,12 +2166,22 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
     // Find the session with matching topic
     final sessions = _appKit!.sessions.getAll();
 
+    await fileLog.logSdk('SDK sessions after relay stabilization', {
+      'count': sessions.length,
+      'topics': sessions.map((s) => s.topic.substring(0, 10)).toList(),
+      'peerNames': sessions.map((s) => s.peer.metadata.name).toList(),
+    });
+
     AppLogger.wallet('Sessions available after relay stabilization', data: {
       'count': sessions.length,
       'topics': sessions.map((s) => TopicValidator.maskForLogging(s.topic)).toList(),
     });
 
     var targetSession = sessions.where((s) => s.topic == validatedTopic).firstOrNull;
+    await fileLog.logSdk('Direct topic match result', {
+      'lookingFor': validatedTopic.substring(0, 10),
+      'found': targetSession != null,
+    });
     final directTopicMatch = targetSession != null;
     String? newTopic;
 
@@ -2209,6 +2232,12 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
     // === CRITICAL: Orphan session detection ===
     // If no session found after all fallbacks, this is an orphan session
     if (targetSession == null) {
+      await fileLog.logSdk('ORPHAN SESSION DETECTED - will be deleted from storage', {
+        'requestedTopic': validatedTopic.substring(0, 10),
+        'availableSessions': sessions.length,
+        'availableTopics': sessions.map((s) => s.topic.substring(0, 10)).toList(),
+        'walletType': walletType.name,
+      });
       AppLogger.wallet('ORPHAN SESSION DETECTED - Topic not in SDK', data: {
         'requestedTopic': TopicValidator.maskForLogging(validatedTopic),
         'availableSessions': sessions.length,
@@ -2221,9 +2250,20 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
     }
 
     // Validate the session
+    await fileLog.logValidation('Validating session', {
+      'topic': targetSession.topic.substring(0, 10),
+      'peerName': targetSession.peer.metadata.name,
+      'walletType': walletType.name,
+    });
     final isValid = isSessionValid(targetSession);
 
+    await fileLog.logValidation('Session validation result', {
+      'isValid': isValid,
+      'topic': targetSession.topic.substring(0, 10),
+    });
+
     if (!isValid) {
+      await fileLog.logValidation('SESSION INVALID - restoration failed');
       AppLogger.wallet('Session found but invalid', data: {
         'sessionTopic': TopicValidator.maskForLogging(targetSession.topic),
       });

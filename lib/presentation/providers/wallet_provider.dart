@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
 import 'package:wallet_integration_practice/core/core.dart';
+import 'package:wallet_integration_practice/core/services/file_log_service.dart';
 import 'package:wallet_integration_practice/data/datasources/local/wallet_local_datasource.dart';
 import 'package:wallet_integration_practice/data/datasources/local/multi_session_datasource.dart';
 import 'package:wallet_integration_practice/data/models/persisted_session_model.dart';
@@ -1062,29 +1063,57 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
   /// Restore a WalletConnect-based session from entry
   /// Uses SessionRestoreResult to detect orphan sessions and handle them appropriately
   Future<WalletEntity?> _restoreWalletConnectSession(dynamic entry) async {
+    final fileLog = FileLogService.instance;
+    final wcSession = entry.walletConnectSession;
+    final walletType = wcSession?.walletType;
+    final isMetaMask = walletType?.toLowerCase().contains('metamask') ?? false;
+
+    await fileLog.logRestore('_restoreWalletConnectSession START', {
+      'walletId': entry.walletId,
+      'walletType': walletType,
+      'isMetaMask': isMetaMask,
+    });
+
     AppLogger.wallet('_restoreWalletConnectSession called', data: {
       'walletId': entry.walletId,
       'sessionType': entry.sessionType.toString(),
     });
 
-    final wcSession = entry.walletConnectSession;
     if (wcSession == null) {
+      await fileLog.logRestore('wcSession is NULL - cannot restore');
       return null;
     }
 
     final persistedSession = wcSession.toEntity();
 
+    await fileLog.logRestore('Session data loaded', {
+      'topic': persistedSession.sessionTopic.substring(0, 10),
+      'address': persistedSession.address.substring(0, 10),
+      'walletType': persistedSession.walletType,
+      'isExpired': persistedSession.isExpired,
+      'expiresAt': persistedSession.expiresAt?.toIso8601String(),
+    });
+
     if (persistedSession.isExpired) {
+      await fileLog.logRestore('SESSION EXPIRED - not restoring', {
+        'walletId': entry.walletId,
+        'expiresAt': persistedSession.expiresAt?.toIso8601String(),
+      });
       AppLogger.wallet('WalletConnect session expired', data: {
         'walletId': entry.walletId,
       });
       return null;
     }
 
-    final walletType = WalletType.values.firstWhere(
+    final walletTypeEnum = WalletType.values.firstWhere(
       (t) => t.name == persistedSession.walletType,
       orElse: () => WalletType.walletConnect,
     );
+
+    await fileLog.logRestore('Calling restoreSessionWithResult', {
+      'walletType': walletTypeEnum.name,
+      'topic': persistedSession.sessionTopic.substring(0, 10),
+    });
 
     AppLogger.wallet('Attempting WalletConnect session restoration', data: {
       'walletType': persistedSession.walletType,
@@ -1094,15 +1123,28 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
     // First attempt: use restoreSessionWithResult to get detailed status
     final result = await _walletService.restoreSessionWithResult(
       sessionTopic: persistedSession.sessionTopic,
-      walletType: walletType,
+      walletType: walletTypeEnum,
       fallbackAddress: persistedSession.address,
     );
 
+    await fileLog.logRestore('restoreSessionWithResult returned', {
+      'status': result.status.name,
+      'isSuccess': result.isSuccess,
+      'isOrphanSession': result.isOrphanSession,
+      'shouldRetry': result.shouldRetry,
+      'message': result.message,
+    });
+
     // === CRITICAL: Handle orphan sessions immediately (no retry) ===
     if (result.isOrphanSession) {
+      await fileLog.logRestore('ORPHAN SESSION DETECTED - will be DELETED', {
+        'walletId': entry.walletId,
+        'walletType': walletTypeEnum.name,
+        'isMetaMask': isMetaMask,
+      });
       AppLogger.wallet('ORPHAN SESSION - removing from storage immediately', data: {
         'walletId': entry.walletId,
-        'walletType': walletType.name,
+        'walletType': walletTypeEnum.name,
         'message': result.message,
       });
       // Remove from local storage - this session no longer exists in SDK
@@ -1162,7 +1204,7 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
       while (backoff.hasMoreRetries) {
         final retryResult = await _walletService.restoreSessionWithResult(
           sessionTopic: persistedSession.sessionTopic,
-          walletType: walletType,
+          walletType: walletTypeEnum,
           fallbackAddress: persistedSession.address,
         );
 
