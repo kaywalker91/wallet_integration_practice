@@ -128,6 +128,16 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
     resetBackgroundTracking();
   }
 
+  /// Reset background reconnection counter to allow new attempts.
+  ///
+  /// Call this when app returns to foreground to allow new relay reconnection
+  /// attempts after background attempts were exhausted due to Android restrictions.
+  @protected
+  void resetBackgroundReconnectionAttempts() {
+    _backgroundReconnectAttempts = 0;
+    AppLogger.wallet('Background reconnection attempts reset');
+  }
+
   // ===== Background Tracking Methods (for Soft Timeout) =====
 
   /// Accumulated background time during current connection attempt
@@ -421,9 +431,25 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
       // 2. If waiting for approval (restoration) → use _ensureRelayAndCheckSession (includes reconnect)
       // 3. Otherwise → use _safeReconnectRelay (simple reconnect)
       if (_isNewConnection && _isWaitingForApproval) {
-        // NEW CONNECTION: Skip lifecycle relay reconnect to avoid race condition with deep link handler
-        // The deep link handler (_handleOkxCallback/_handleAppResumed) will handle session check
-        AppLogger.wallet('New connection in progress, skipping lifecycle relay reconnect');
+        // NEW CONNECTION: Handle carefully to avoid race with deep link handler
+        AppLogger.wallet('New connection in progress - checking relay state');
+
+        // Reset background counter since we're now in foreground
+        _backgroundReconnectAttempts = 0;
+
+        // Check actual relay state (detect zombie connections)
+        final relayActuallyConnected = _refreshRelayState();
+
+        if (!relayActuallyConnected) {
+          // Relay is dead - force foreground reconnection
+          // This runs async to not block lifecycle callback
+          // Deep link handler will still run and find relay ready
+          AppLogger.wallet('Relay dead during new connection, forcing foreground reconnect');
+          unawaited(_forceRelayReconnectForNewConnection());
+        }
+
+        // Still skip full session check to avoid race with deep link handler
+        // Deep link handler or watchdog timer will complete the connection
         return;
       }
 
@@ -883,6 +909,34 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
     }
   }
 
+  /// Force relay reconnection during new connection flow.
+  ///
+  /// This is called when app resumes during a new connection attempt
+  /// and the relay is detected as disconnected. It performs relay
+  /// reconnection without doing a full session check to avoid race
+  /// conditions with the deep link handler.
+  Future<void> _forceRelayReconnectForNewConnection() async {
+    if (_appKit == null) return;
+
+    AppLogger.wallet('Forcing foreground relay reconnect for new connection');
+
+    try {
+      // Reset background counter since we're now in foreground
+      _backgroundReconnectAttempts = 0;
+
+      // Use progressive reconnection for reliability
+      final success = await progressiveRelayReconnect();
+
+      AppLogger.wallet('Foreground relay reconnect result', data: {
+        'success': success,
+      });
+    } catch (e) {
+      AppLogger.wallet('Foreground relay reconnect error (absorbed)', data: {
+        'error': e.toString(),
+      });
+    }
+  }
+
   /// Ensure relay is connected, attempting reconnection if needed.
   ///
   /// Returns true if relay is connected, false if reconnection failed.
@@ -944,8 +998,11 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
 
     void onError(dynamic event) {
       if (!completer.isCompleted) {
-        AppLogger.wallet('Relay reconnection error', data: {'error': event?.toString()});
-        // Don't complete on error - wait for timeout or success
+        AppLogger.wallet('Relay reconnection error - completing immediately', data: {
+          'error': event?.toString(),
+        });
+        completer.complete(false);
+        timeoutTimer?.cancel();
       }
     }
 

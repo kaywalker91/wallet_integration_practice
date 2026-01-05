@@ -18,6 +18,27 @@ iLity Hub를 위한 지갑 연동 실습
 
 ## 최근 변경 사항
 
+### 2026-01-05: MetaMask 딥링크 처리 및 WalletConnect Relay 안정성 강화
+
+**기능**: MetaMask 딥링크 연동을 고도화하고, 앱 생명주기 변경 시 WalletConnect Relay 연결 안정성을 개선했습니다.
+
+**주요 개선 사항**:
+1.  **MetaMask 딥링크 연동 강화**:
+    *   **강력한 딥링크 핸들링**: MetaMask를 위한 포괄적인 딥링크 핸들러(`_handleMetaMaskCallback`, `_handleAppResumed`)를 구현했습니다. 지갑 앱에서 복귀 시 세션을 정확하게 감지하기 위해 '낙관적 세션 확인 -> Relay 연결 검증 -> 전파 대기 -> 최종 세션 확인'의 다단계 검증 로직을 도입했습니다.
+    *   **상태 관리**: 콜백 처리 중 무한 루프나 경쟁 상태(Race Condition)를 방지하기 위해 상태 플래그(`_handlersRegistered`, `_isProcessingCallback`, `_deepLinkPending`)를 추가했습니다.
+    *   **검증 로직**: 세션 혼동을 방지하기 위해 MetaMask 세션/리다이렉트를 명시적으로 허용하고, 다른 알려진 지갑(Trust, OKX, Phantom 등)은 거부하도록 검증을 강화했습니다.
+    *   **폴백 메커니즘**: 네이티브 앱 실행 실패 시 유니버셜 링크를 사용하는 폴백 로직을 개선했습니다.
+2.  **WalletConnect Relay 안정성**:
+    *   **백그라운드 재연결 초기화**: 앱이 포그라운드로 복귀할 때 백그라운드 재연결 카운터를 초기화하여 새로운 재연결 시도를 허용하도록 개선했습니다.
+    *   **새로운 연결 처리**: `didChangeAppLifecycleState`를 개선하여, 새로운 연결 시도 중 앱이 재개될 때 Relay가 끊어져 있으면 포그라운드 재연결을 강제하되, 딥링크 핸들러와 충돌하지 않도록 처리했습니다.
+    *   **Fail-Fast 로직**: `ensureRelayConnected`가 에러 이벤트 발생 시 타임아웃을 기다리지 않고 즉시 실패하도록 수정하여 반응성을 높였습니다.
+
+**변경된 파일**:
+- `lib/wallet/adapters/metamask_adapter.dart`: 딥링크 핸들러, 상태 관리, 검증 로직
+- `lib/wallet/adapters/walletconnect_adapter.dart`: Relay 재연결 로직, 생명주기 핸들링
+
+---
+
 ### 2025-12-31: WalletConnect 세션 레지스트리 및 멀티 세션 아키텍처 강화
 
 **기능**: 여러 WalletConnect 세션을 중앙에서 체계적으로 관리하기 위한 `WalletConnectSessionRegistry` 도입 및 관련 데이터 모델/어댑터 리팩토링.
