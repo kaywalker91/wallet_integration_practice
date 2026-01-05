@@ -18,6 +18,30 @@ iLity Hub를 위한 지갑 연동 실습
 
 ## 최근 변경 사항
 
+### 2026-01-05: WalletConnect Relay State Machine 및 Crypto Isolate 최적화 (Part 2)
+
+**기능**: WalletConnect Relay 연결 상태를 스레드 안전하게 관리하는 State Machine 도입 및 암호화 연산의 Isolate 최적화.
+
+**주요 개선 사항**:
+1.  **Relay Connection State Machine**:
+    *   **경쟁 상태(Race Condition) 방지**: `RelayConnectionStateMachine`을 도입하여 연결/재연결/해제 간의 상태 전이를 스레드 안전하게 관리합니다.
+    *   **안전한 재연결**: 기존의 플래그 기반(`_isReconnecting`) 로직을 대체하여, `disconnected` → `connecting` → `connected` 등의 유효한 상태 흐름을 강제합니다.
+2.  **Crypto Isolate 최적화**:
+    *   **백그라운드 연산**: Phantom 지갑의 페이로드 복호화, Base58 배치 디코딩, Ed25519 서명 검증 등 무거운 암호화 작업을 백그라운드 `Isolate`로 이관했습니다.
+    *   **UI 끊김 방지**: 메인 스레드 부하를 줄여 복호화 시 발생하던 UI 프레임 드랍 현상을 해결했습니다.
+3.  **Address Validation (심층 방어)**:
+    *   **RPC 호출 전 검증**: `AddressValidationService`를 구현하여 EVM/Solana 주소 포맷이 대상 체인과 일치하는지 사전에 검증합니다.
+    *   **불필요한 에러 방지**: 잘못된 형식의 주소로 RPC를 호출하여 발생하는 "Invalid param" 에러를 원천 차단합니다.
+
+**변경된 파일**:
+- `lib/wallet/adapters/relay_connection_state.dart` (신규)
+- `lib/core/utils/crypto_isolate.dart` (신규)
+- `lib/core/utils/address_validation_service.dart` (신규)
+- `lib/wallet/adapters/walletconnect_adapter.dart`: State Machine 적용
+- `lib/data/repositories/balance_repository_impl.dart`: 주소 검증 적용
+
+---
+
 ### 2026-01-05: MetaMask 딥링크 처리 및 WalletConnect Relay 안정성 강화
 
 **기능**: MetaMask 딥링크 연동을 고도화하고, 앱 생명주기 변경 시 WalletConnect Relay 연결 안정성을 개선했습니다.

@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:wallet_integration_practice/core/constants/app_constants.dart';
 import 'package:wallet_integration_practice/core/constants/chain_constants.dart';
+import 'package:wallet_integration_practice/core/utils/address_validation_service.dart';
 import 'package:wallet_integration_practice/core/utils/logger.dart';
 import 'package:wallet_integration_practice/data/datasources/local/balance_cache_datasource.dart';
 import 'package:wallet_integration_practice/data/datasources/remote/evm_balance_datasource.dart';
@@ -74,6 +76,34 @@ final chainBalanceProvider =
   if (address == null) {
     AppLogger.w('[DEBUG] chainBalanceProvider: address is null, returning null');
     return null;
+  }
+
+  // === Defense in depth: Early validation at provider level ===
+  // This prevents unnecessary repository calls when address format is wrong
+  if (AppConstants.enableAddressValidation) {
+    final validation = AddressValidationService.validateForChain(
+      address: address,
+      chainType: chain.type,
+    );
+
+    if (!validation.isValid) {
+      final error = validation.error!;
+      final detectedType = error.detectedChainType?.name ?? 'unknown';
+      AppLogger.e(
+        '[DEBUG] chainBalanceProvider: Address format mismatch - '
+        'expected ${chain.type.name}, detected $detectedType',
+      );
+
+      // Return error entity without calling RPC
+      return NativeBalanceEntity(
+        address: address,
+        chain: chain,
+        balanceWei: BigInt.zero,
+        balanceFormatted: 0.0,
+        fetchedAt: DateTime.now(),
+        error: 'Address format mismatch: expected ${chain.type.name} format',
+      );
+    }
   }
 
   final repository = ref.watch(balanceRepositoryProvider);

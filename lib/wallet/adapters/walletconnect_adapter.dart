@@ -11,6 +11,7 @@ import 'package:wallet_integration_practice/wallet/models/session_validation_res
 import 'package:wallet_integration_practice/wallet/models/wallet_reconnection_config.dart';
 import 'package:wallet_integration_practice/wallet/models/session_restore_result.dart';
 import 'package:wallet_integration_practice/wallet/utils/topic_validator.dart';
+import 'package:wallet_integration_practice/wallet/adapters/relay_connection_state.dart';
 
 /// Callback type for session deletion events
 /// Used to synchronize app's local storage when SDK deletes a session
@@ -58,6 +59,11 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
 
   /// Track relay connection state for cold start recovery
   bool _isRelayConnected = false;
+
+  /// State machine for relay connection management
+  /// Prevents race conditions during reconnection attempts
+  final RelayConnectionStateMachine _relayStateMachine =
+      RelayConnectionStateMachine();
 
   /// Whether a relay reconnection is currently in progress
   /// Used to prevent multiple simultaneous reconnection attempts
@@ -856,12 +862,22 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
   /// by ensuring the old WebSocket stream is fully cleaned up before
   /// attempting a new connection.
   ///
-  /// Uses `_isReconnecting` flag to prevent multiple simultaneous
-  /// reconnection attempts which can cause race conditions.
+  /// Uses [RelayConnectionStateMachine] to prevent race conditions
+  /// during concurrent reconnection attempts.
+  ///
+  /// When [AppConstants.useRelayStateMachine] is true, uses state machine
+  /// for thread-safe state transitions. Otherwise, falls back to legacy
+  /// flag-based approach.
   Future<void> _safeReconnectRelay() async {
     if (_appKit == null) return;
 
-    // Prevent duplicate reconnection attempts
+    // Use state machine for thread-safe reconnection if enabled
+    if (AppConstants.useRelayStateMachine) {
+      await _safeReconnectRelayWithStateMachine();
+      return;
+    }
+
+    // Legacy approach: Prevent duplicate reconnection attempts
     if (_isReconnecting) {
       AppLogger.wallet('Safe reconnect skipped: already reconnecting');
       return;
@@ -879,8 +895,10 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
         });
       }
 
-      // Step 2: Short delay to allow stream cleanup (increased for stability)
-      await Future.delayed(const Duration(milliseconds: 300));
+      // Step 2: Short delay to allow stream cleanup
+      await Future.delayed(
+        Duration(milliseconds: AppConstants.relayCleanupDelayMs),
+      );
 
       // Step 3: Attempt reconnection
       await _appKit!.core.relayClient.connect();
@@ -907,6 +925,107 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
     } finally {
       _isReconnecting = false;
     }
+  }
+
+  /// State machine-based relay reconnection
+  ///
+  /// Uses [RelayConnectionStateMachine] to enforce valid state transitions
+  /// and prevent race conditions during reconnection.
+  Future<void> _safeReconnectRelayWithStateMachine() async {
+    if (_appKit == null) return;
+
+    // Attempt state transition to reconnecting
+    final canReconnect = await _relayStateMachine.tryTransition(
+      RelayConnectionState.reconnecting,
+    );
+
+    if (!canReconnect) {
+      AppLogger.wallet('State machine blocked reconnect attempt', data: {
+        'currentState': _relayStateMachine.state.name,
+      });
+      return;
+    }
+
+    try {
+      // Step 1: Unsubscribe relay events before disconnect to prevent
+      // callbacks on closing stream
+      _unsubscribeRelayEventsForReconnect();
+
+      // Step 2: Explicitly disconnect to clean up zombie socket state
+      try {
+        await _appKit!.core.relayClient.disconnect();
+      } catch (e) {
+        // Ignore disconnect errors - socket may already be closed
+        AppLogger.wallet('Relay disconnect during cleanup (ignorable)', data: {
+          'error': e.toString(),
+        });
+      }
+
+      // Step 3: Delay for complete WebSocket stream cleanup
+      // Increased from 300ms to allow full stream disposal
+      await Future.delayed(
+        Duration(milliseconds: AppConstants.relayCleanupDelayMs),
+      );
+
+      // Step 4: Resubscribe relay events before connect
+      _subscribeRelayEventsForReconnect();
+
+      // Step 5: Attempt reconnection
+      await _appKit!.core.relayClient.connect();
+
+      // Step 6: Transition to connected state
+      await _relayStateMachine.tryTransition(RelayConnectionState.connected);
+      _isRelayConnected = true;
+
+      AppLogger.wallet('Safe relay reconnection completed (state machine)');
+    } catch (e) {
+      final errorStr = e.toString();
+      // Handle "Bad state" errors gracefully
+      if (errorStr.contains('Bad state') || errorStr.contains('closed')) {
+        AppLogger.wallet('Relay stream conflict during reconnect', data: {
+          'error': errorStr,
+        });
+
+        // Check actual connection state despite the error
+        await Future.delayed(const Duration(milliseconds: 300));
+        if (_appKit!.core.relayClient.isConnected) {
+          await _relayStateMachine.tryTransition(RelayConnectionState.connected);
+          _isRelayConnected = true;
+          AppLogger.wallet('Relay connected despite stream error');
+        } else {
+          await _relayStateMachine.tryTransition(RelayConnectionState.error);
+        }
+      } else {
+        await _relayStateMachine.tryTransition(RelayConnectionState.error);
+        AppLogger.wallet('Relay reconnection failed (state machine)', data: {
+          'error': errorStr,
+        });
+      }
+    }
+  }
+
+  /// Temporarily unsubscribe relay events during reconnection
+  ///
+  /// This prevents "Bad state" errors from event callbacks firing
+  /// on a closing stream during disconnect/reconnect cycle.
+  void _unsubscribeRelayEventsForReconnect() {
+    try {
+      _appKit?.core.relayClient.onRelayClientConnect.unsubscribe(_onRelayConnect);
+      _appKit?.core.relayClient.onRelayClientDisconnect.unsubscribe(_onRelayDisconnect);
+      _appKit?.core.relayClient.onRelayClientError.unsubscribe(_onRelayError);
+    } catch (e) {
+      // Ignore unsubscribe errors - events may already be unsubscribed
+      AppLogger.wallet('Relay event unsubscribe error (ignorable)', data: {
+        'error': e.toString(),
+      });
+    }
+  }
+
+  /// Resubscribe relay events after reconnection stream is ready
+  void _subscribeRelayEventsForReconnect() {
+    _appKit?.core.relayClient.onRelayClientConnect.subscribe(_onRelayConnect);
+    _appKit?.core.relayClient.onRelayClientDisconnect.subscribe(_onRelayDisconnect);
+    _appKit?.core.relayClient.onRelayClientError.subscribe(_onRelayError);
   }
 
   /// Force relay reconnection during new connection flow.
@@ -1891,6 +2010,82 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
     return result.wallet;
   }
 
+  /// Validate session offline (without relay connection)
+  ///
+  /// This method performs a preliminary validation of the session using only
+  /// local SDK storage, without requiring a relay connection. This is useful
+  /// for:
+  /// - Quick session existence check on cold start
+  /// - Showing cached wallet state while relay is reconnecting
+  /// - Distinguishing between "session gone" and "relay unavailable"
+  ///
+  /// Returns [SessionRestoreResult] with status:
+  /// - [SessionRestoreStatus.offlinePending]: Session found locally, needs relay
+  /// - [SessionRestoreStatus.offlineNotFound]: Session not in local storage
+  /// - [SessionRestoreStatus.appKitNotReady]: AppKit not initialized
+  /// - [SessionRestoreStatus.invalidTopicFormat]: Topic format is invalid
+  Future<SessionRestoreResult> validateSessionOffline(
+    String sessionTopic, {
+    String? fallbackAddress,
+  }) async {
+    AppLogger.wallet('validateSessionOffline called', data: {
+      'topic': TopicValidator.maskForLogging(sessionTopic),
+      'fallbackAddress': fallbackAddress?.substring(0, 10),
+      'walletType': walletType.name,
+    });
+
+    if (_appKit == null) {
+      AppLogger.wallet('validateSessionOffline: AppKit not initialized');
+      return SessionRestoreResult.appKitNotReady('AppKit not initialized');
+    }
+
+    // Topic format validation (no network required)
+    final topicValidation = TopicValidator.validate(sessionTopic);
+    if (!topicValidation.isValid) {
+      AppLogger.wallet('validateSessionOffline: Invalid topic format', data: {
+        'message': topicValidation.message,
+      });
+      return SessionRestoreResult.invalidTopicFormat(
+        topicValidation.message ?? 'Invalid topic format',
+      );
+    }
+
+    // Check if session exists in SDK local storage (no relay required)
+    final sessions = _appKit!.sessions.getAll();
+    final sessionExists = sessions.any((s) => s.topic == topicValidation.topic);
+
+    if (sessionExists) {
+      AppLogger.wallet('validateSessionOffline: Session found locally');
+      return SessionRestoreResult.offlinePending(
+        '세션이 로컬에서 확인됨, 릴레이 연결 대기 중',
+      );
+    }
+
+    // Try address fallback (local check only)
+    if (fallbackAddress != null) {
+      final sessionByAddress = _findSessionByAddressStrict(
+        fallbackAddress,
+        walletType,
+      );
+      if (sessionByAddress != null) {
+        AppLogger.wallet('validateSessionOffline: Session found by address', data: {
+          'newTopic': TopicValidator.maskForLogging(sessionByAddress.topic),
+        });
+        return SessionRestoreResult.offlinePending(
+          '주소로 세션 확인됨, 토픽이 변경되었을 수 있음',
+          newTopic: sessionByAddress.topic,
+        );
+      }
+    }
+
+    // Session not found locally
+    // Don't mark as orphan yet - it might exist on relay but not synced
+    AppLogger.wallet('validateSessionOffline: Session not found locally');
+    return SessionRestoreResult.offlineNotFound(
+      '로컬 SDK 저장소에서 세션을 찾을 수 없습니다',
+    );
+  }
+
   /// Restore session by topic with detailed result information
   ///
   /// This method is called when the app restarts and we have a persisted
@@ -2529,5 +2724,8 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
 
     await _connectionController.close();
     await _accountsChangedController.close();
+
+    // Dispose relay state machine
+    _relayStateMachine.dispose();
   }
 }

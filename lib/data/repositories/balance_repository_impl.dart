@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'package:dartz/dartz.dart';
+import 'package:wallet_integration_practice/core/constants/app_constants.dart';
 import 'package:wallet_integration_practice/core/constants/chain_constants.dart';
 import 'package:wallet_integration_practice/core/errors/exceptions.dart';
 import 'package:wallet_integration_practice/core/errors/failures.dart';
+import 'package:wallet_integration_practice/core/utils/address_validation_service.dart';
 import 'package:wallet_integration_practice/core/utils/logger.dart';
 import 'package:wallet_integration_practice/data/datasources/local/balance_cache_datasource.dart';
 import 'package:wallet_integration_practice/data/datasources/remote/evm_balance_datasource.dart';
@@ -35,6 +37,27 @@ class BalanceRepositoryImpl implements BalanceRepository {
     bool forceRefresh = false,
   }) async {
     AppLogger.d('[DEBUG] Repository.getNativeBalance called - address: $address, chain: ${chain.name}, rpcUrl: ${chain.rpcUrl}');
+
+    // === Address validation: Prevent RPC calls with mismatched address format ===
+    if (AppConstants.enableAddressValidation) {
+      final validation = AddressValidationService.validateForChain(
+        address: address,
+        chainType: chain.type,
+      );
+
+      if (!validation.isValid) {
+        final error = validation.error!;
+        AppLogger.e(
+          '[DEBUG] Repository: Address validation FAILED - ${error.message}',
+          null,
+        );
+        return Left(BalanceFailure.addressChainMismatch(
+          address: error.received ?? address,
+          expectedChainType: chain.type.name,
+          detectedChainType: error.detectedChainType?.name,
+        ));
+      }
+    }
 
     try {
       // Check cache first (if not forcing refresh)

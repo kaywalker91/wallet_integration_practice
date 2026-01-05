@@ -1,5 +1,7 @@
-import 'dart:async';
+import 'dart:async' show unawaited;
+import 'package:flutter/widgets.dart' show AppLifecycleState;
 import 'package:reown_appkit/reown_appkit.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wallet_integration_practice/core/core.dart';
 import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
@@ -12,6 +14,12 @@ import 'package:wallet_integration_practice/wallet/adapters/walletconnect_adapte
 class MetaMaskAdapter extends WalletConnectAdapter {
   MetaMaskAdapter({super.config});
 
+  /// Persistent recovery state key for SharedPreferences
+  static const String _recoveryStateKey = 'metamask_pending_recovery';
+
+  /// Recovery state validity duration (5 minutes)
+  static const int _recoveryValidityMs = 5 * 60 * 1000;
+
   /// Flag to track if deep link handlers are registered
   bool _handlersRegistered = false;
 
@@ -21,8 +29,119 @@ class MetaMaskAdapter extends WalletConnectAdapter {
   /// Flag to track if deep link is being processed (for grace period logic)
   bool _deepLinkPending = false;
 
+  /// In-memory cache of recovery state (for quick access)
+  /// Actual state is persisted to SharedPreferences
+  bool _pendingPostTimeoutRecovery = false;
+
   @override
   WalletType get walletType => WalletType.metamask;
+
+  /// Check if pending recovery state exists in persistent storage
+  /// Returns true if recovery state was set within the last 5 minutes
+  Future<bool> _hasPendingRecovery() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final recoveryTime = prefs.getInt(_recoveryStateKey);
+      if (recoveryTime == null) return false;
+
+      final elapsed = DateTime.now().millisecondsSinceEpoch - recoveryTime;
+      final isValid = elapsed < _recoveryValidityMs;
+
+      if (!isValid) {
+        // Clean up expired recovery state
+        await prefs.remove(_recoveryStateKey);
+      }
+
+      return isValid;
+    } catch (e) {
+      AppLogger.e('Error checking MetaMask recovery state', e);
+      return false;
+    }
+  }
+
+  /// Set or clear pending recovery state in persistent storage
+  Future<void> _setPendingRecovery(bool pending) async {
+    _pendingPostTimeoutRecovery = pending;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (pending) {
+        await prefs.setInt(
+          _recoveryStateKey,
+          DateTime.now().millisecondsSinceEpoch,
+        );
+        AppLogger.wallet('MetaMask: Recovery state saved to persistent storage');
+      } else {
+        await prefs.remove(_recoveryStateKey);
+        AppLogger.wallet('MetaMask: Recovery state cleared from persistent storage');
+      }
+    } catch (e) {
+      AppLogger.e('Error setting MetaMask recovery state', e);
+    }
+  }
+
+  /// Override lifecycle to handle post-error recovery for MetaMask
+  /// Checks both in-memory flag and persistent storage for recovery state
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+
+    // MetaMask-specific handling: post-timeout recovery
+    if (state == AppLifecycleState.resumed) {
+      // Check in-memory flag first (fast path)
+      if (_pendingPostTimeoutRecovery) {
+        AppLogger.wallet('MetaMask: Post-timeout recovery on resume (in-memory)');
+        unawaited(_checkForPostErrorRecovery());
+      } else {
+        // Check persistent storage (survives process death)
+        unawaited(_checkPersistentRecovery());
+      }
+    }
+  }
+
+  /// Check persistent storage for recovery state (survives app process death)
+  Future<void> _checkPersistentRecovery() async {
+    if (isConnected) return;
+
+    final hasPending = await _hasPendingRecovery();
+    if (hasPending) {
+      AppLogger.wallet('MetaMask: Found persistent recovery state, attempting recovery');
+      await _checkForPostErrorRecovery();
+    }
+  }
+
+  /// Check for session recovery after soft timeout
+  /// This runs when user returns from MetaMask after a soft timeout occurred
+  Future<void> _checkForPostErrorRecovery() async {
+    if (isConnected) {
+      AppLogger.wallet('MetaMask post-error: Already connected');
+      await _setPendingRecovery(false);
+      return;
+    }
+
+    AppLogger.wallet('=== MetaMask Post-Error Recovery START ===');
+
+    // Wait for relay to reconnect (now in foreground)
+    final relayOk = await ensureRelayConnected(
+      timeout: const Duration(seconds: 8),
+    );
+    AppLogger.wallet('Post-error relay reconnection', data: {'success': relayOk});
+
+    // Small delay for session sync
+    await Future.delayed(const Duration(milliseconds: 500));
+
+    // Check for session
+    await optimisticSessionCheck();
+
+    if (isConnected && connectedAddress != null) {
+      AppLogger.wallet('=== MetaMask Post-Error Recovery SUCCESS ===');
+      await _setPendingRecovery(false);
+      // Connection status will be emitted by optimisticSessionCheck
+    } else {
+      AppLogger.wallet('=== MetaMask Post-Error Recovery: No session ===');
+      // Keep recovery state for next resume attempt
+      // It will expire after 5 minutes automatically
+    }
+  }
 
   /// Initialize the adapter and register deep link handlers
   @override

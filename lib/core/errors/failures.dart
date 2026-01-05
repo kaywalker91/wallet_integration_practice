@@ -198,6 +198,24 @@ class BalanceFailure extends Failure {
     );
   }
 
+  /// Creates a failure for address/chain type mismatch
+  ///
+  /// This occurs when an EVM address (0x...) is used with Solana chain
+  /// or a Solana address (Base58) is used with EVM chain.
+  factory BalanceFailure.addressChainMismatch({
+    required String address,
+    required String expectedChainType,
+    String? detectedChainType,
+  }) {
+    final detectedHint =
+        detectedChainType != null ? ' (detected: $detectedChainType)' : '';
+    return BalanceFailure(
+      message:
+          'Address format does not match $expectedChainType chain$detectedHint',
+      code: 'ADDRESS_CHAIN_MISMATCH',
+    );
+  }
+
   factory BalanceFailure.timeout(String chainName) {
     return BalanceFailure(
       message: 'Balance request timed out for $chainName',

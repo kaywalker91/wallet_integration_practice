@@ -115,4 +115,61 @@ class AppConstants {
   /// When true, uses WalletReconnectionConfig for all wallets.
   /// When false, uses legacy OKX-specific constants.
   static const bool enableGeneralizedReconnectionConfig = true;
+
+  // ======== Session Persistence Feature Flags ========
+
+  /// Enable offline-first session validation.
+  /// When enabled, validates sessions locally before attempting relay connection.
+  /// Reduces perceived latency and handles offline scenarios gracefully.
+  static const bool enableOfflineFirstValidation = true;
+
+  /// Enable persistent recovery state for MetaMask.
+  /// When enabled, recovery state survives process death using SharedPreferences.
+  static const bool enableMetaMaskPersistentRecovery = true;
+
+  /// Enable persistent recovery state for OKX Wallet.
+  /// When enabled, recovery state survives process death using SharedPreferences.
+  static const bool enableOkxPersistentRecovery = true;
+
+  /// Maximum time to wait for relay propagation after session is established.
+  /// Used for both initial connection and restoration.
+  static const Duration maxRelayPropagationWait = Duration(milliseconds: 2000);
+
+  /// Recovery state validity duration.
+  /// Recovery states older than this will be automatically cleaned up.
+  static const Duration recoveryStateValidity = Duration(minutes: 5);
+
+  // ============================================================
+  // Address Validation Feature Flags
+  // ============================================================
+
+  /// Enable address format validation before RPC calls.
+  /// When enabled, validates that address format matches the target chain type
+  /// (e.g., EVM addresses start with 0x, Solana addresses are Base58).
+  /// Set to false to rollback if validation causes issues.
+  static const bool enableAddressValidation = true;
+
+  // ============================================================
+  // Relay Connection Feature Flags
+  // ============================================================
+
+  /// Enable relay connection state machine for WebSocket stability.
+  /// When enabled, uses RelayConnectionStateMachine to prevent race conditions.
+  static const bool useRelayStateMachine = true;
+
+  /// Delay in milliseconds between relay disconnect and reconnect.
+  /// Increased from 300ms to allow complete WebSocket stream cleanup.
+  static const int relayCleanupDelayMs = 500;
+
+  // ============================================================
+  // Phantom Performance Feature Flags
+  // ============================================================
+
+  /// Enable isolate-based crypto operations for Phantom wallet.
+  /// When enabled, decryption runs in background isolate to prevent UI jank.
+  static const bool useIsolateCrypto = true;
+
+  /// Enable async (fire-and-forget) session persistence.
+  /// When enabled, session saving doesn't block the connection flow.
+  static const bool useAsyncSessionPersistence = true;
 }

@@ -81,6 +81,23 @@ class SessionRestoreResult {
     );
   }
 
+  /// Creates a result for offline validation pending (session found locally)
+  factory SessionRestoreResult.offlinePending(String message, {String? newTopic}) {
+    return SessionRestoreResult._(
+      status: SessionRestoreStatus.offlinePending,
+      message: message,
+      newTopic: newTopic,
+    );
+  }
+
+  /// Creates a result for offline validation not found (session not in local storage)
+  factory SessionRestoreResult.offlineNotFound(String message) {
+    return SessionRestoreResult._(
+      status: SessionRestoreStatus.offlineNotFound,
+      message: message,
+    );
+  }
+
   /// The restoration status
   final SessionRestoreStatus status;
 
@@ -146,6 +163,12 @@ enum SessionRestoreStatus {
 
   /// Topic format is invalid
   invalidTopicFormat,
+
+  /// Session found in offline validation, needs relay for full validation
+  offlinePending,
+
+  /// Session not found offline, but may exist on relay
+  offlineNotFound,
 }
 
 /// Extension for SessionRestoreStatus
@@ -167,6 +190,10 @@ extension SessionRestoreStatusExtension on SessionRestoreStatus {
         return 'AppKit이 초기화되지 않았습니다';
       case SessionRestoreStatus.invalidTopicFormat:
         return '토픽 형식이 유효하지 않습니다';
+      case SessionRestoreStatus.offlinePending:
+        return '오프라인 검증 완료, 네트워크 연결 대기 중';
+      case SessionRestoreStatus.offlineNotFound:
+        return '로컬에서 세션을 찾을 수 없습니다';
     }
   }
 }
