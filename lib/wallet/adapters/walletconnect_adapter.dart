@@ -1985,6 +1985,17 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
     return _session?.topic;
   }
 
+  /// Get the current session's pairing topic for persistence
+  ///
+  /// This is crucial for reconnecting orphan sessions that are no longer
+  /// in the SDK storage. The pairing topic allows re-establishing a session
+  /// without requiring a new QR code scan.
+  ///
+  /// Returns null if no session is currently active.
+  String? getPairingTopic() {
+    return _session?.pairingTopic;
+  }
+
   /// Get all active session topics from the SDK
   ///
   /// Used to synchronize app's local storage with SDK state.
@@ -2489,6 +2500,111 @@ class WalletConnectAdapter extends EvmWalletAdapter with WidgetsBindingObserver 
       'attempts': maxAttempts,
     });
     return false;
+  }
+
+  /// Attempt to reconnect using an existing pairing topic.
+  ///
+  /// This is useful for restoring orphan sessions (sessions stored in app storage
+  /// but not present in SDK storage after app restart). If the pairing is still
+  /// valid, the wallet app will receive a connection request and the user can
+  /// approve it to restore the session.
+  ///
+  /// Returns the new [SessionData] if successful, null otherwise.
+  Future<SessionData?> reconnectViaPairing({
+    required String pairingTopic,
+    int? targetChainId,
+    Duration timeout = const Duration(seconds: 30),
+  }) async {
+    if (_appKit == null) {
+      AppLogger.wallet('reconnectViaPairing: AppKit not initialized');
+      return null;
+    }
+
+    try {
+      // 1. Check if the pairing exists and is active
+      final pairings = _appKit!.core.pairing.getStore().getAll();
+      final pairing = pairings.where((p) => p.topic == pairingTopic).firstOrNull;
+
+      if (pairing == null) {
+        AppLogger.wallet('reconnectViaPairing: Pairing not found', data: {
+          'pairingTopic': pairingTopic.substring(0, 8),
+          'availablePairings': pairings.length,
+        });
+        return null;
+      }
+
+      if (!pairing.active) {
+        AppLogger.wallet('reconnectViaPairing: Pairing is inactive', data: {
+          'pairingTopic': pairingTopic.substring(0, 8),
+        });
+        return null;
+      }
+
+      AppLogger.wallet('reconnectViaPairing: Found active pairing, attempting reconnect', data: {
+        'pairingTopic': pairingTopic.substring(0, 8),
+        'targetChainId': targetChainId,
+      });
+
+      // 2. Ensure relay is connected
+      final relayConnected = await ensureRelayConnected();
+      if (!relayConnected) {
+        AppLogger.wallet('reconnectViaPairing: Relay connection failed');
+        return null;
+      }
+
+      // 3. Build namespaces with target chain
+      final chainId = targetChainId ?? ChainConstants.polygonMainnet;
+      final optionalChainIds = <int>{
+        ..._config.supportedChainIds,
+        chainId,
+      };
+
+      final optionalNamespaces = {
+        'eip155': RequiredNamespace(
+          chains: optionalChainIds.map((id) => 'eip155:$id').toList(),
+          methods: _config.supportedMethods,
+          events: _config.supportedEvents,
+        ),
+      };
+
+      // 4. Attempt to connect using existing pairing
+      _isWaitingForApproval = true;
+      _isNewConnection = false; // This is a reconnection, not new
+
+      final connectResponse = await _appKit!.connect(
+        optionalNamespaces: optionalNamespaces,
+        pairingTopic: pairingTopic,
+      );
+
+      // 5. Wait for session approval with timeout
+      final session = await connectResponse.session.future.timeout(
+        timeout,
+        onTimeout: () {
+          AppLogger.wallet('reconnectViaPairing: Timeout waiting for approval');
+          throw TimeoutException('Pairing reconnection timed out');
+        },
+      );
+
+      _isWaitingForApproval = false;
+
+      _session = session;
+      _parseSessionAccounts();
+      AppLogger.wallet('reconnectViaPairing: Successfully reconnected', data: {
+        'sessionTopic': session.topic.substring(0, 8),
+        'peerName': session.peer.metadata.name,
+      });
+      return session;
+    } on TimeoutException {
+      _isWaitingForApproval = false;
+      AppLogger.wallet('reconnectViaPairing: Timed out');
+      return null;
+    } catch (e) {
+      _isWaitingForApproval = false;
+      AppLogger.wallet('reconnectViaPairing: Failed', data: {
+        'error': e.toString(),
+      });
+      return null;
+    }
   }
 
   /// Clear all previous WalletConnect pairings and sessions.

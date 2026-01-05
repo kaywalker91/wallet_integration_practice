@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:reown_appkit/reown_appkit.dart' show SessionData;
 import 'package:wallet_integration_practice/core/core.dart';
 import 'package:wallet_integration_practice/domain/entities/session_validation_result.dart';
 import 'package:wallet_integration_practice/domain/entities/wallet_entity.dart';
@@ -358,6 +359,82 @@ class WalletService {
     }
   }
 
+  /// Reconnect a stale session by initiating a new connection.
+  ///
+  /// Stale sessions occur when the app's local storage has session info
+  /// but the WalletConnect SDK no longer has the session. This typically
+  /// happens when a new wallet connection displaces older sessions in the SDK.
+  ///
+  /// This method initiates a fresh connection to the same wallet type,
+  /// allowing the user to re-establish the session from their wallet app.
+  ///
+  /// Returns the newly connected WalletEntity if successful.
+  Future<WalletEntity> reconnectStaleSession({
+    required WalletType walletType,
+    int? chainId,
+    String? cluster,
+  }) async {
+    AppLogger.wallet('Reconnecting stale session', data: {
+      'walletType': walletType.name,
+      'chainId': chainId,
+      'cluster': cluster,
+    });
+
+    // Simply initiate a new connection - the user will approve in their wallet app
+    return connect(
+      walletType: walletType,
+      chainId: chainId,
+      cluster: cluster,
+    );
+  }
+
+  /// Attempt to reconnect a stale session using an existing pairing.
+  ///
+  /// This is a faster reconnection method that reuses an existing pairing
+  /// to restore the session without requiring a new QR scan. If the pairing
+  /// is still valid on the wallet side, the user will receive a connection
+  /// request in their wallet app.
+  ///
+  /// Returns the session data if successful, null otherwise.
+  /// Falls back to null if pairing is not found, inactive, or connection fails.
+  Future<SessionData?> reconnectViaPairing({
+    required WalletType walletType,
+    required String pairingTopic,
+    int? chainId,
+  }) async {
+    AppLogger.wallet('Attempting pairing-based reconnection', data: {
+      'walletType': walletType.name,
+      'pairingTopic': pairingTopic.length > 8 ? '${pairingTopic.substring(0, 8)}...' : pairingTopic,
+      'chainId': chainId,
+    });
+
+    // Initialize or get adapter for this wallet type
+    final adapter = await initializeAdapter(walletType);
+
+    if (adapter is! WalletConnectAdapter) {
+      AppLogger.wallet('reconnectViaPairing: Not a WalletConnect adapter', data: {
+        'walletType': walletType.name,
+      });
+      return null;
+    }
+
+    // Attempt reconnection via pairing
+    final session = await adapter.reconnectViaPairing(
+      pairingTopic: pairingTopic,
+      targetChainId: chainId,
+      timeout: const Duration(seconds: 15), // Shorter timeout for auto-reconnect
+    );
+
+    if (session != null) {
+      AppLogger.wallet('Pairing reconnection successful', data: {
+        'sessionTopic': session.topic.substring(0, 8),
+        'peerName': session.peer.metadata.name,
+      });
+    }
+
+    return session;
+  }
+
   /// Get connection URI for QR code display
   Future<String?> getConnectionUri() async {
     return _activeAdapter?.getConnectionUri();
@@ -370,6 +447,21 @@ class WalletService {
   Future<String?> getSessionTopic() async {
     if (_activeAdapter is WalletConnectAdapter) {
       return (_activeAdapter as WalletConnectAdapter).getSessionTopic();
+    }
+    return null;
+  }
+
+  /// Get the current session's pairing topic for persistence
+  ///
+  /// The pairing topic is essential for reconnecting orphan sessions.
+  /// When a session is displaced from SDK storage by a new connection,
+  /// the pairing topic allows re-establishing the session without a new QR scan.
+  ///
+  /// Returns the pairing topic from the active WalletConnect-based adapter,
+  /// or null if no session is active or the adapter doesn't support it.
+  Future<String?> getPairingTopic() async {
+    if (_activeAdapter is WalletConnectAdapter) {
+      return (_activeAdapter as WalletConnectAdapter).getPairingTopic();
     }
     return null;
   }

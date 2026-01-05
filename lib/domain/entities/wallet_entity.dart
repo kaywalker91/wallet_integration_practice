@@ -11,6 +11,7 @@ class WalletEntity extends Equatable {
     this.sessionTopic,
     required this.connectedAt,
     this.metadata,
+    this.isStale = false,
   });
 
   final String address;
@@ -20,6 +21,10 @@ class WalletEntity extends Equatable {
   final String? sessionTopic;
   final DateTime connectedAt;
   final Map<String, dynamic>? metadata;
+
+  /// Indicates if this session is stale (not in SDK but preserved for reconnection).
+  /// Stale sessions require user action to reconnect.
+  final bool isStale;
 
   /// Check if connected to EVM chain
   bool get isEvmChain => chainId != null;
@@ -39,6 +44,7 @@ class WalletEntity extends Equatable {
     String? sessionTopic,
     DateTime? connectedAt,
     Map<String, dynamic>? metadata,
+    bool? isStale,
   }) {
     return WalletEntity(
       address: address ?? this.address,
@@ -48,6 +54,7 @@ class WalletEntity extends Equatable {
       sessionTopic: sessionTopic ?? this.sessionTopic,
       connectedAt: connectedAt ?? this.connectedAt,
       metadata: metadata ?? this.metadata,
+      isStale: isStale ?? this.isStale,
     );
   }
 
@@ -59,6 +66,7 @@ class WalletEntity extends Equatable {
         cluster,
         sessionTopic,
         connectedAt,
+        isStale,
       ];
 }
 

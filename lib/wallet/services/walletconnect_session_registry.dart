@@ -347,6 +347,43 @@ class WalletConnectSessionRegistry {
     }
   }
 
+  /// Mark a specific session as stale by walletId
+  /// Returns true if session was found and marked, false otherwise
+  bool markSessionStaleByWalletId(String walletId) {
+    final session = getSessionByWalletId(walletId);
+    if (session == null) {
+      AppLogger.wallet('Cannot mark session stale - walletId not found', data: {
+        'walletId': walletId,
+      });
+      return false;
+    }
+
+    updateSessionState(session.topic, SessionState.stale);
+    AppLogger.wallet('Session marked as stale by walletId', data: {
+      'walletId': walletId,
+      'topic': session.topic.substring(0, 8),
+      'walletType': session.walletType.name,
+    });
+    return true;
+  }
+
+  /// Get all stale sessions for UI display
+  List<ManagedSession> getStaleSessions() {
+    return getSessionsByState(SessionState.stale);
+  }
+
+  /// Check if a session is stale by topic
+  bool isSessionStale(String topic) {
+    final session = _sessions[topic];
+    return session?.state == SessionState.stale;
+  }
+
+  /// Check if a session is stale by walletId
+  bool isSessionStaleByWalletId(String walletId) {
+    final session = getSessionByWalletId(walletId);
+    return session?.state == SessionState.stale;
+  }
+
   /// Get session count
   int get sessionCount => _sessions.length;
 

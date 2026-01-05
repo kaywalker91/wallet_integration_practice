@@ -18,6 +18,28 @@ iLity Hub를 위한 지갑 연동 실습
 
 ## 최근 변경 사항
 
+### 2026-01-05: 코드 정리 및 아키텍처 단순화 (Part 4)
+
+**기능**: 사용하지 않는 레거시 코드, 위젯, 서비스를 제거하고 핵심 로직을 최적화하여 유지보수성을 향상시켰습니다.
+
+**주요 개선 사항**:
+1.  **레거시 코드 제거**:
+    *   더 이상 사용되지 않는 `ReownAppKitService`를 완전히 제거하고, 관련 로직을 `WalletConnectAdapter` 및 `WalletConnectSessionRegistry`로 통합했습니다.
+    *   초기 개발 단계에서 사용되던 `DebugLogProvider`(현재 `FileLogService`로 대체됨), `AccountSelectorDialog`, `WalletStatusIndicator` 등 불필요한 UI/Provider 컴포넌트를 삭제했습니다.
+2.  **코드 최적화**:
+    *   `WalletService` 및 `WalletProvider`에서 삭제된 컴포넌트와 관련된 의존성 및 죽은 코드(Dead Code)를 정리했습니다.
+    *   주요 어댑터(`OKXWalletAdapter`, `WalletConnectAdapter`)의 코드를 정리하고 가독성을 개선했습니다.
+
+**변경된 파일**:
+- `lib/presentation/providers/debug_log_provider.dart` (삭제)
+- `lib/presentation/widgets/wallet/account_selector_dialog.dart` (삭제)
+- `lib/presentation/widgets/wallet/wallet_status_indicator.dart` (삭제)
+- `lib/wallet/services/reown_appkit_service.dart` (삭제)
+- `lib/wallet/services/wallet_service.dart`: 정리
+- `lib/presentation/providers/wallet_provider.dart`: 정리
+
+---
+
 ### 2026-01-05: File-based Logging System & Session Debugging (Part 3)
 
 **기능**: 세션 복원 및 콜드 스타트 이슈를 추적하기 위한 영구 파일 로깅 시스템 및 인앱 디버그 뷰어 도입.

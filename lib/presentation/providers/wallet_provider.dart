@@ -560,6 +560,9 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
         return;
       }
 
+      // Get pairing topic for potential reconnection (crucial for multi-session)
+      final pairingTopic = await _walletService.getPairingTopic();
+
       final now = DateTime.now();
       final session = PersistedSessionModel(
         walletType: wallet.type.name,
@@ -570,6 +573,7 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
         createdAt: now,
         lastUsedAt: now,
         expiresAt: now.add(const Duration(days: 7)), // 7-day expiration
+        pairingTopic: pairingTopic, // Store pairing topic for reconnection
       );
 
       // Save to multi-session storage
@@ -585,6 +589,7 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
         'walletId': walletId,
         'walletType': wallet.type.name,
         'address': wallet.address,
+        'hasPairingTopic': pairingTopic != null,
       });
     } else if (wallet.type == WalletType.phantom) {
       // Phantom session is saved by the adapter, we just need to add to multi-session
@@ -1054,8 +1059,9 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
       return null;
     } catch (e, st) {
       AppLogger.e('Failed to restore session entry: ${entry.walletId}', e, st);
-      // Remove failed session
-      await _multiSessionDataSource.removeSession(entry.walletId);
+      // DO NOT remove failed session - preserve for potential future restoration
+      // Unexpected errors shouldn't cause permanent data loss
+      // Session will be marked as stale implicitly by returning null
       return null;
     }
   }
@@ -1135,21 +1141,114 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
       'message': result.message,
     });
 
-    // === CRITICAL: Handle orphan sessions immediately (no retry) ===
+    // === CRITICAL: Handle orphan sessions - attempt pairing reconnection first ===
+    // Orphan sessions are not in SDK but may be reconnectable via existing pairing.
+    // We attempt auto-reconnection first, falling back to stale status if it fails.
     if (result.isOrphanSession) {
-      await fileLog.logRestore('ORPHAN SESSION DETECTED - will be DELETED', {
+      await fileLog.logRestore('ORPHAN SESSION DETECTED - attempting pairing reconnection', {
         'walletId': entry.walletId,
         'walletType': walletTypeEnum.name,
-        'isMetaMask': isMetaMask,
+        'hasPairingTopic': persistedSession.pairingTopic != null,
       });
-      AppLogger.wallet('ORPHAN SESSION - removing from storage immediately', data: {
+
+      // Try pairing-based auto-reconnection if we have a pairing topic
+      if (persistedSession.pairingTopic != null) {
+        AppLogger.wallet('ORPHAN SESSION - attempting auto-reconnection via pairing', data: {
+          'walletId': entry.walletId,
+          'walletType': walletTypeEnum.name,
+          'pairingTopic': '${persistedSession.pairingTopic!.substring(0, 8)}...',
+        });
+
+        try {
+          final newSession = await _walletService.reconnectViaPairing(
+            walletType: walletTypeEnum,
+            pairingTopic: persistedSession.pairingTopic!,
+            chainId: persistedSession.chainId,
+          );
+
+          if (newSession != null) {
+            await fileLog.logRestore('PAIRING RECONNECTION SUCCESSFUL', {
+              'walletId': entry.walletId,
+              'newSessionTopic': newSession.topic.substring(0, 8),
+            });
+
+            // Extract address from new session
+            final accounts = newSession.namespaces['eip155']?.accounts ?? [];
+            final newAddress = accounts.isNotEmpty
+                ? accounts.first.split(':').last
+                : persistedSession.address;
+
+            // Update stored session with new topic
+            final updatedSession = PersistedSessionModel(
+              sessionTopic: newSession.topic,
+              address: newAddress,
+              chainId: persistedSession.chainId,
+              cluster: persistedSession.cluster,
+              walletType: persistedSession.walletType,
+              createdAt: persistedSession.createdAt,
+              lastUsedAt: DateTime.now(),
+              expiresAt: DateTime.fromMillisecondsSinceEpoch(newSession.expiry * 1000),
+              pairingTopic: newSession.pairingTopic,
+              peerName: newSession.peer.metadata.name,
+              peerIconUrl: newSession.peer.metadata.icons.isNotEmpty
+                  ? newSession.peer.metadata.icons.first
+                  : null,
+            );
+
+            await _multiSessionDataSource.saveWalletConnectSession(
+              walletId: entry.walletId,
+              session: updatedSession,
+            );
+
+            AppLogger.wallet('ORPHAN SESSION RECOVERED via pairing reconnection', data: {
+              'walletId': entry.walletId,
+              'newAddress': newAddress,
+            });
+
+            return WalletEntity(
+              address: newAddress,
+              type: walletTypeEnum,
+              chainId: persistedSession.chainId,
+              cluster: persistedSession.cluster,
+              sessionTopic: newSession.topic,
+              connectedAt: DateTime.now(),
+              isStale: false, // Successfully reconnected!
+            );
+          }
+        } catch (e) {
+          await fileLog.logRestore('PAIRING RECONNECTION FAILED', {
+            'walletId': entry.walletId,
+            'error': e.toString(),
+          });
+          AppLogger.wallet('Pairing reconnection failed - falling back to stale', data: {
+            'walletId': entry.walletId,
+            'error': e.toString(),
+          });
+        }
+      }
+
+      // Pairing reconnection failed or no pairing topic - mark as stale
+      await fileLog.logRestore('ORPHAN SESSION - marked as STALE', {
+        'walletId': entry.walletId,
+        'walletType': walletTypeEnum.name,
+      });
+      AppLogger.wallet('ORPHAN SESSION - marking as stale (pairing reconnection unavailable)', data: {
         'walletId': entry.walletId,
         'walletType': walletTypeEnum.name,
         'message': result.message,
       });
-      // Remove from local storage - this session no longer exists in SDK
-      await _multiSessionDataSource.removeSession(entry.walletId);
-      return null;
+
+      // DO NOT delete - preserve for potential manual reconnection
+      // Return a stale WalletEntity so UI can show reconnect option
+      return WalletEntity(
+        address: persistedSession.address,
+        type: walletTypeEnum,
+        chainId: persistedSession.chainId,
+        cluster: persistedSession.cluster,
+        sessionTopic: persistedSession.sessionTopic,
+        connectedAt: persistedSession.createdAt,
+        isStale: true,
+      );
     }
 
     // Handle successful restoration
@@ -1209,12 +1308,21 @@ class WalletNotifier extends Notifier<AsyncValue<WalletEntity?>> {
         );
 
         // Check for orphan on retry (SDK state may have changed)
+        // Mark as stale instead of deleting - preserve for reconnection
         if (retryResult.isOrphanSession) {
-          AppLogger.wallet('Session became orphan during retry', data: {
+          AppLogger.wallet('Session became orphan during retry - marking as stale', data: {
             'walletId': entry.walletId,
           });
-          await _multiSessionDataSource.removeSession(entry.walletId);
-          return null;
+          // Return stale entity instead of deleting
+          return WalletEntity(
+            address: persistedSession.address,
+            type: walletTypeEnum,
+            chainId: persistedSession.chainId,
+            cluster: persistedSession.cluster,
+            sessionTopic: persistedSession.sessionTopic,
+            connectedAt: persistedSession.createdAt,
+            isStale: true,
+          );
         }
 
         if (retryResult.isSuccess && retryResult.wallet != null) {

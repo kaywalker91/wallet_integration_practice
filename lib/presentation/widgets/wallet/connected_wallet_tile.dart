@@ -16,6 +16,7 @@ class ConnectedWalletTile extends StatefulWidget {
     this.onDisconnect,
     this.onRetry,
     this.onRemove,
+    this.onReconnect,
     this.balance,
   });
 
@@ -24,6 +25,9 @@ class ConnectedWalletTile extends StatefulWidget {
   final VoidCallback? onDisconnect;
   final VoidCallback? onRetry;
   final VoidCallback? onRemove;
+
+  /// Callback when user wants to reconnect a stale session
+  final VoidCallback? onReconnect;
 
   /// Optional balance value for display
   final double? balance;
@@ -81,15 +85,16 @@ class _ConnectedWalletTileState extends State<ConnectedWalletTile>
     final isConnecting = widget.entry.status == WalletEntryStatus.connecting;
     final hasError = widget.entry.status == WalletEntryStatus.error;
     final isConnected = widget.entry.status == WalletEntryStatus.connected;
+    final isStale = wallet.isStale;
 
     // Wrap with shimmer effect for connecting state
     final Widget tileContent = AnimatedContainer(
       duration: const Duration(milliseconds: 200),
       decoration: BoxDecoration(
-        color: _getBackgroundColor(theme, hasError),
+        color: _getBackgroundColor(theme, hasError: hasError, isStale: isStale),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: _getBorderColor(theme, hasError),
+          color: _getBorderColor(theme, hasError: hasError, isStale: isStale),
           width: widget.entry.isActive ? 2 : 1,
         ),
       ),
@@ -105,12 +110,18 @@ class _ConnectedWalletTileState extends State<ConnectedWalletTile>
             child: Column(
               children: [
                 // Main row - always visible
-                _buildMainRow(theme, wallet, isConnecting, hasError, isConnected),
+                _buildMainRow(theme, wallet, isConnecting, hasError, isConnected, isStale),
 
                 // Loading indicator
                 if (isConnecting) ...[
                   const SizedBox(height: 8),
                   const LinearProgressIndicator(),
+                ],
+
+                // Stale session section
+                if (isStale && !hasError) ...[
+                  const SizedBox(height: 8),
+                  _buildStaleSection(theme),
                 ],
 
                 // Error section
@@ -120,7 +131,7 @@ class _ConnectedWalletTileState extends State<ConnectedWalletTile>
                 ],
 
                 // Expanded details
-                if (_isExpanded && !hasError) ...[
+                if (_isExpanded && !hasError && !isStale) ...[
                   const SizedBox(height: 12),
                   _buildExpandedDetails(theme, wallet, isConnected),
                 ],
@@ -176,9 +187,12 @@ class _ConnectedWalletTileState extends State<ConnectedWalletTile>
     return tileContent;
   }
 
-  Color _getBackgroundColor(ThemeData theme, bool hasError) {
+  Color _getBackgroundColor(ThemeData theme, {required bool hasError, bool isStale = false}) {
     if (hasError) {
       return theme.colorScheme.errorContainer.withValues(alpha: 0.2);
+    }
+    if (isStale) {
+      return Colors.orange.withValues(alpha: 0.08);
     }
     if (widget.entry.isActive) {
       return theme.colorScheme.primaryContainer.withValues(alpha: 0.15);
@@ -186,9 +200,12 @@ class _ConnectedWalletTileState extends State<ConnectedWalletTile>
     return theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3);
   }
 
-  Color _getBorderColor(ThemeData theme, bool hasError) {
+  Color _getBorderColor(ThemeData theme, {required bool hasError, bool isStale = false}) {
     if (hasError) {
       return theme.colorScheme.error.withValues(alpha: 0.3);
+    }
+    if (isStale) {
+      return Colors.orange.withValues(alpha: 0.4);
     }
     if (widget.entry.isActive) {
       return theme.colorScheme.primary.withValues(alpha: 0.5);
@@ -202,6 +219,7 @@ class _ConnectedWalletTileState extends State<ConnectedWalletTile>
     bool isConnecting,
     bool hasError,
     bool isConnected,
+    bool isStale,
   ) {
     return Row(
       children: [
@@ -211,6 +229,7 @@ class _ConnectedWalletTileState extends State<ConnectedWalletTile>
           isActive: widget.entry.isActive,
           hasError: hasError,
           isConnecting: isConnecting,
+          isStale: isStale,
         ),
         const SizedBox(width: 12),
 
@@ -226,22 +245,27 @@ class _ConnectedWalletTileState extends State<ConnectedWalletTile>
                       wallet.type.displayName,
                       style: theme.textTheme.titleSmall?.copyWith(
                         fontWeight: FontWeight.w600,
+                        color: isStale ? theme.colorScheme.onSurfaceVariant : null,
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                  if (widget.entry.isActive && isConnected)
+                  if (widget.entry.isActive && isConnected && !isStale)
                     _ActiveBadge(theme: theme),
+                  if (isStale)
+                    _StaleBadge(theme: theme),
                 ],
               ),
               const SizedBox(height: 2),
               Text(
                 isConnecting
                     ? 'Connecting...'
-                    : '${AddressUtils.truncate(wallet.address, start: 6, end: 4)} · ${WalletUtils.getNetworkName(wallet.chainId, wallet.cluster)}',
+                    : isStale
+                        ? '${AddressUtils.truncate(wallet.address, start: 6, end: 4)} · 재연결 필요'
+                        : '${AddressUtils.truncate(wallet.address, start: 6, end: 4)} · ${WalletUtils.getNetworkName(wallet.chainId, wallet.cluster)}',
                 style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
+                  color: isStale ? Colors.orange : theme.colorScheme.onSurfaceVariant,
                   fontFamily: 'monospace',
                 ),
               ),
@@ -270,6 +294,50 @@ class _ConnectedWalletTileState extends State<ConnectedWalletTile>
           ],
         ),
       ],
+    );
+  }
+
+  Widget _buildStaleSection(ThemeData theme) {
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.orange.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.sync_problem,
+            size: 16,
+            color: Colors.orange,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              '세션이 만료되었습니다. 다시 연결해주세요.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: Colors.orange.shade800,
+              ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (widget.onReconnect != null) ...[
+            const SizedBox(width: 8),
+            FilledButton.icon(
+              onPressed: widget.onReconnect,
+              icon: const Icon(Icons.refresh, size: 14),
+              label: const Text('재연결'),
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.orange,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                minimumSize: const Size(0, 28),
+                textStyle: theme.textTheme.labelSmall,
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 
@@ -441,12 +509,14 @@ class _WalletIcon extends StatefulWidget {
     required this.isActive,
     required this.hasError,
     this.isConnecting = false,
+    this.isStale = false,
   });
 
   final WalletType walletType;
   final bool isActive;
   final bool hasError;
   final bool isConnecting;
+  final bool isStale;
 
   @override
   State<_WalletIcon> createState() => _WalletIconState();
@@ -468,8 +538,8 @@ class _WalletIconState extends State<_WalletIcon>
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
 
-    // Start pulse animation if active
-    if (widget.isActive && !widget.hasError) {
+    // Start pulse animation if active (but not stale)
+    if (widget.isActive && !widget.hasError && !widget.isStale) {
       _pulseController.repeat(reverse: true);
     }
   }
@@ -477,7 +547,7 @@ class _WalletIconState extends State<_WalletIcon>
   @override
   void didUpdateWidget(_WalletIcon oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.isActive && !widget.hasError) {
+    if (widget.isActive && !widget.hasError && !widget.isStale) {
       if (!_pulseController.isAnimating) {
         _pulseController.repeat(reverse: true);
       }
@@ -558,7 +628,7 @@ class _WalletIconState extends State<_WalletIcon>
             child: AnimatedBuilder(
               animation: _pulseAnimation,
               builder: (context, child) {
-                final scale = widget.isActive && !widget.hasError
+                final scale = widget.isActive && !widget.hasError && !widget.isStale
                     ? _pulseAnimation.value
                     : 1.0;
                 return Transform.scale(
@@ -569,15 +639,17 @@ class _WalletIconState extends State<_WalletIcon>
                     decoration: BoxDecoration(
                       color: widget.hasError
                           ? Colors.red
-                          : widget.isActive
-                              ? Colors.green
-                              : theme.colorScheme.surfaceContainerHighest,
+                          : widget.isStale
+                              ? Colors.orange
+                              : widget.isActive
+                                  ? Colors.green
+                                  : theme.colorScheme.surfaceContainerHighest,
                       shape: BoxShape.circle,
                       border: Border.all(
                         color: theme.colorScheme.surface,
                         width: 2,
                       ),
-                      boxShadow: widget.isActive && !widget.hasError
+                      boxShadow: widget.isActive && !widget.hasError && !widget.isStale
                           ? [
                               BoxShadow(
                                 color: Colors.green.withValues(
@@ -591,9 +663,11 @@ class _WalletIconState extends State<_WalletIcon>
                     ),
                     child: widget.hasError
                         ? const Icon(Icons.close, size: 8, color: Colors.white)
-                        : widget.isActive
-                            ? const Icon(Icons.check, size: 8, color: Colors.white)
-                            : null,
+                        : widget.isStale
+                            ? const Icon(Icons.sync_problem, size: 8, color: Colors.white)
+                            : widget.isActive
+                                ? const Icon(Icons.check, size: 8, color: Colors.white)
+                                : null,
                   ),
                 );
               },
@@ -625,6 +699,43 @@ class _ActiveBadge extends StatelessWidget {
           fontWeight: FontWeight.w600,
           fontSize: 10,
         ),
+      ),
+    );
+  }
+}
+
+/// Stale badge indicator for sessions that need reconnection
+class _StaleBadge extends StatelessWidget {
+  const _StaleBadge({required this.theme});
+
+  final ThemeData theme;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: Colors.orange,
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(
+            Icons.sync_problem,
+            size: 10,
+            color: Colors.white,
+          ),
+          const SizedBox(width: 2),
+          Text(
+            'Stale',
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: Colors.white,
+              fontWeight: FontWeight.w600,
+              fontSize: 10,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -680,42 +791,6 @@ class _DetailItem extends StatelessWidget {
   }
 }
 
-/// Badge indicating this is the active wallet (legacy export)
-class ActiveWalletBadge extends StatelessWidget {
-  const ActiveWalletBadge({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.primaryContainer,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            Icons.check_circle,
-            size: 14,
-            color: theme.colorScheme.primary,
-          ),
-          const SizedBox(width: 4),
-          Text(
-            'Active Wallet',
-            style: theme.textTheme.labelSmall?.copyWith(
-              color: theme.colorScheme.primary,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 // ============================================================================
 // Auto-Balance Wrapper
 // ============================================================================
@@ -732,6 +807,7 @@ class ConnectedWalletTileWithBalance extends ConsumerWidget {
     this.onDisconnect,
     this.onRetry,
     this.onRemove,
+    this.onReconnect,
   });
 
   final ConnectedWalletEntry entry;
@@ -739,6 +815,7 @@ class ConnectedWalletTileWithBalance extends ConsumerWidget {
   final VoidCallback? onDisconnect;
   final VoidCallback? onRetry;
   final VoidCallback? onRemove;
+  final VoidCallback? onReconnect;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -772,6 +849,7 @@ class ConnectedWalletTileWithBalance extends ConsumerWidget {
       onDisconnect: onDisconnect,
       onRetry: onRetry,
       onRemove: onRemove,
+      onReconnect: onReconnect,
     );
   }
 }

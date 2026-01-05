@@ -223,6 +223,8 @@ class _WalletList extends StatelessWidget {
           onDisconnect: () => onDisconnect(entry.id),
           onRetry: () => onRetry(entry.id),
           onRemove: () => onRemove(entry.id),
+          // Use onRetry for stale session reconnection as well
+          onReconnect: () => onRetry(entry.id),
         );
       },
     );
